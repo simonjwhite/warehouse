@@ -989,3 +989,20 @@ perl /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/Warehouse/Scripts/sl
 
 
 # next annotation?
+
+# going to process DBSNP 1st - run it through cassandra with a single analysis then upload?
+# I might need a script to do this unless I can use vcf tools to split variants out onto different lines
+# I have a script of my own for this dont i!!
+
+# lets dump DbSNP and 1000Kg - anything that is a vcf
+cd /stornext/snfs5/next-gen/scratch/simonw/Cassandra/svn_checkout/MercuryAnnotation/HbaseImport
+# dbsnp
+echo "zcat ../DataSourcesMar14/00-All.vcf.gz | perl -I /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/vcftools_0.1.11/perl/ \
+/stornext/snfs5/next-gen/scratch/simonw/Eclipse/Scripts/vcf2tsv.pl -tags RS,CLNSIG, -blank -info -hbase " | \
+msub -V -q analysis -l nodes=1:ppn=1,mem=5000mb -d .  -o dbSNP_import.txt -e dbSNP_meta.txt
+# 1000kg
+echo "zcat ../DataSourcesMar14/ALL.wgs.integrated_phase1_v3.20101123.snps_indels_sv.sites.vcf.gz | perl -I /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/vcftools_0.1.11/perl/ \
+/stornext/snfs5/next-gen/scratch/simonw/Eclipse/Scripts/vcf2tsv.pl -tags AMR_AF,ASN_AF,AFR_AF,EUR_AF,AF,AA -blank -info -hbase " | \
+msub -V -q analysis -l nodes=1:ppn=1,mem=5000mb -d .  -o 1KG_import.txt -e 1KG_meta.txt
+
+# look into bulk upload and annotation tomorrow

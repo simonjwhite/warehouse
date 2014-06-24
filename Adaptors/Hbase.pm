@@ -804,11 +804,11 @@ sub list {
 sub liftoverData {
 	my ( $self, $data ) = @_;
 	my $assembly = $self->liftover;
-	my $sa     = $self->SliceAdaptor;
+	my $sa       = $self->SliceAdaptor;
+
 	# check we have it
 	my $asma = $self->AssemblyMapperAdaptor();
 	my $csa  = $self->CoordSystemAdaptor();
-
 	my $hash = $self->parseRowKey($data);
 
 	# fetch coord system we are on
@@ -823,57 +823,78 @@ sub liftoverData {
 	$end = $hash->{'START'} unless $end;
 	my @chr_coords =
 	  $asm_mapper->map( $hash->{'CHR'}, $hash->{'START'}, $end, 1, $csf );
-	  my $cnt = 0 ;
+	my $cnt = 0;
 	foreach my $c (@chr_coords) {
 		if ( $c->isa("Bio::EnsEMBL::Mapper::Gap") ) {
-			print STDERR "Variant liftover  " . $hash->{"ASS"} .":" .
-			$hash->{"CHR"} . ":" . 
-			$hash->{"START"} . "-" . 
-			$hash->{"END"} ." has a gap : " .
-			$self->liftover .":" .$c->start ."-".$c->end."\n";
+			print STDERR "Variant liftover  "
+			  . $hash->{"ASS"} . ":"
+			  . $hash->{"CHR"} . ":"
+			  . $hash->{"START"} . "-"
+			  . $hash->{"END"}
+			  . " has a gap : "
+			  . $self->liftover . ":"
+			  . $c->start . "-"
+			  . $c->end . "\n";
 		}
 		if ( $c->isa("Bio::EnsEMBL::Mapper::Coordinate") ) {
 			$cnt++;
-			my $slice = $sa->fetch_by_seq_region_id($c->id);
-		#	print STDERR "COORDS "
-		#	. $slice->seq_region_name ." " 
-		#	  . $c->start . " "
-		#	  . $c->end . "\n";
-		# check the ref?
-		# modify the row key
-		my $row = $data->{'row'};
-		#print "ROW $row becomes ";
-		my @array = split("\t",$row);
-		$array[0] = substr($slice->coord_system->name,0,1);
-		$array[1] = $self->liftover;
-		$array[2] = $slice->seq_region_name;
-		$array[3] = $c->start;
-		$array[4] = $c->end;
-		#print STDERR  join(":",@array) ."\n";
-		$data->{'row'} = join(":",@array) ;
+			my $slice = $sa->fetch_by_seq_region_id( $c->id );
+
+			#	print STDERR "COORDS "
+			#	. $slice->seq_region_name ." "
+			#	  . $c->start . " "
+			#	  . $c->end . "\n";
+			# check the ref?
+			# modify the row key
+			my $row = $data->{'row'};
+
+			#print "ROW $row becomes ";
+			my @array = split( "\t", $row );
+			$array[0] = substr( $slice->coord_system->name, 0, 1 );
+			$array[1] = $self->liftover;
+			$array[2] = $slice->seq_region_name;
+			$array[3] = $c->start;
+			$array[4] = $c->end;
+
+			#print STDERR  join(":",@array) ."\n";
+			$data->{'row'} = join( ":", @array );
+
+			# also need to change the END column if it exists in the VCF
+			my $ch = $data->{'columns'};
+			my @line = split( "\t", $ch->{"D:"}->{'value'} );
+			 
+			if ( $line[5] =~ /^END=\d+$/ ) {
+				$line[5] = "END=" . $c->end;
+
+				# put it back
+				$data->{'columns'}->{"D:"}->{'value'} = join( "\t", @line );
+			}
 		}
 	}
-	if ($cnt == 1){
+	if ( $cnt == 1 ) {
+
 		#checks out
 		return $data;
 	} else {
-		print STDERR "Variant " . $hash->{"ASS"} .":" .
-			$hash->{"CHR"} . ":" . 
-			$hash->{"START"} . "-" . 
-			$hash->{"END"} ." Did not liftover cleanly\n";
+		print STDERR "Variant "
+		  . $hash->{"ASS"} . ":"
+		  . $hash->{"CHR"} . ":"
+		  . $hash->{"START"} . "-"
+		  . $hash->{"END"}
+		  . " Did not liftover cleanly\n";
 		return undef;
 	}
-
 }
-
 
 # do any processing to the data before we format it
 sub process {
 	my ( $self, $data ) = @_;
+
 	# do we want to add any annotation?
 	# do we want to liftover?
 	if ( $self->liftover ) {
 		$data = $self->liftoverData($data);
+
 		# in case it does not liftover cleanly
 		return unless $data;
 	}
@@ -954,7 +975,7 @@ sub getVariantCoverageAdaptor {
 sub parseRowKey {
 	my ( $self, $hash ) = @_;
 	my $data;
-	unless ( $hash ){
+	unless ($hash) {
 		$self->throw("What the what ?  $hash \n");
 	}
 	my @pos = split( ":", $hash->{'row'} );

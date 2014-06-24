@@ -46,7 +46,7 @@ my $svcf = Modules::SampleVCF->new(-con     => $db,
 								  -analysis => $analysis,
 								  -liftover => $cs,
 								  -table    => $table,
-								  -buffer => 50000);
+								  -buffer => 1000);
 							  
 #now make me a vcf
 $svcf->vcfFromSample($sample);
