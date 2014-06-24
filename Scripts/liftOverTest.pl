@@ -6,7 +6,7 @@ use Modules::SampleVCF;
 use Getopt::Long;
 use Env qw(REGISTRY);
 use Bio::EnsEMBL::ApiVersion;
-  printf( "The API version used is %s\n", software_version() );
+
 
 $| = 1;
 
@@ -46,7 +46,7 @@ my $svcf = Modules::SampleVCF->new(-con     => $db,
 								  -analysis => $analysis,
 								  -liftover => $cs,
 								  -table    => $table,
-								  -buffer => 1000);
+								  -buffer => 50000);
 							  
 #now make me a vcf
 $svcf->vcfFromSample($sample);

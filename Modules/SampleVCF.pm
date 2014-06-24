@@ -45,6 +45,8 @@ sub vcfFromSample {
 	  # fortunately the keys are sorted
 	  return unless $data;
 	  foreach my $hash (@{$data}) {
+	  		$self->throw("blah ")
+	  			unless $hash;
 	  		my $d = $self->parseRowKey($hash);
 			my $chr = $d->{"CHR"};
 			my $pos = $d->{"START"};

@@ -119,7 +119,7 @@ while (<$fh>){
 		die("Cannot parse chromosome and position out of the header using chrom and pos/start:\n$_\n")unless defined($chrC) && defined($posC);
 		# store the header
 		my $kvs->{'D'} = $headerLine;
-		htableStore( $sample->dbID . "_" . $analysis->dbID . "_HEADER", $kvs );
+		htableStore( $analysis->dbID .":" .$sample->dbID . ":" .  "HEADER", $kvs );
 		next;
 	}
 	# get the rowkey
@@ -136,8 +136,8 @@ while (<$fh>){
 	# trim off the last tab
 	$row =~ s/\t$//;
 	
-	$end = $line[$endC].":" if $endC;
-	$rowKey = "c:GRCh37:$chr:$pos$end:";
+	$end = $line[$endC] if $endC;
+	$rowKey = "c:GRCh37:$chr:$pos:$end:";
 
 	# store the row(s)
 	$total++;
@@ -151,7 +151,7 @@ while (<$fh>){
 		}
 	}
 	my $kvs->{'D'} = $string;
-	htableStore( $rowKey .$sample->dbID . "_" . $analysis->dbID , $kvs );		
+	htableStore( $rowKey .$analysis->dbID. ":" . $sample->dbID  , $kvs );		
 	$lastRowKey = $rowKey;
 
 	if ($cnt > 5000){ 

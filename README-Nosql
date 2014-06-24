@@ -765,8 +765,10 @@ tabix -s 1 -b 2 -e 2 -S 1 CHARGE.summary.txt.gz
 # 1st make the table
 create 'CHARGE_SUMMARY', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '4', COMPRESSION => 'SNAPPY'} 
  # storing 4 versions as we have 4 possible entries per row 3 alt alleles and '.'
-zcat $SCRATCH/ChargeSummary/SNP/CHARGE.summary.txt.gz | perl $SCRIPTS2/import_TSV_to_Hbase.pl \
- -analysis chargeSummary -table CHARGE_SUMMARY -sample CHARGE
+cd /stornext/snfs5/next-gen/scratch/simonw/Warehouse/ChargeSummary
+echo "zcat $SCRATCH/ChargeSummary/SNP/CHARGE.summary.txt.gz | /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/perl/bin/perl $SCRIPTS2/import_TSV_to_Hbase.pl \
+ -analysis chargeSummary -table CHARGE_SUMMARY -sample CHARGE" | $MSUB5 chargeUpload.out
+ 
  
 Then I need a module to fetch from that table (fetch all the versions for a line)
 
@@ -980,3 +982,10 @@ perl /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/Warehouse/Scripts/sl
  
 
 # going to upload my code to github before I lose it all
+
+# Should we check the ref is the same before lifting over?
+
+# going to load a lot more samples
+
+
+# next annotation?
