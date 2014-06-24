@@ -1,0 +1,982 @@
+making a new space for the Nosql e75 project
+
+# going to make e75 dbs in mysql - also getting git repositories of the data
+mkdir $SCRATCH/Schema $SCRATCH/Code
+cd $SCRATCH/Schema
+ncftpget -R ftp://ftp.ensembl.org/pub/release-75/mysql/homo_sapiens_core_75_37
+gzip -d homo_sapiens_core_75_37/*
+
+mysql $MDBW < homo_sapiens_core_75_37/homo_sapiens_core_75_37.sql
+cd homo_sapiens_core_75_37
+mysqlimport -h sug-esxa-db1  -u simonw -psimonw --fields_escaped_by=\\ simonw_human_37_RNASeq_refined -L *txt
+
+
+
+# for variation just the schema , meta and individual type for now
+ncftpget -R ftp://ftp.ensembl.org/pub/release-75/mysql/homo_sapiens_variation_75_37/homo_sapiens_variation_75_37.sql.gz
+mysql $VDBW < homo_sapiens_variation_75_37.sql
+mysqlimport -h sug-esxa-db1 -u simonw -psimonw --fields_escaped_by=\\ simonw_human_37_RNASeq_rough  -L meta.txt
+mysqlimport -h sug-esxa-db1 -u simonw -psimonw --fields_escaped_by=\\ simonw_human_37_RNASeq_rough  -L meta_coord.txt
+ncftpget  ftp://ftp.ensembl.org/pub/release-75/mysql/homo_sapiens_variation_75_37/individual_type.txt.gz 
+
+gzip -d individual_type.txt.gz 
+mysqlimport  -h sug-esxa-db1 -u simonw -psimonw --fields_escaped_by=\\ simonw_human_37_RNASeq_rough  -L individual_type.txt
+
+# API
+cd $SCRATCH/Code
+git clone https://github.com/bioperl/bioperl-live.git
+cd bioperl-live
+git checkout bioperl-release-1-2-3
+git clone https://github.com/Ensembl/ensembl-git-tools.git
+export PATH=$PWD/ensembl-git-tools/bin:$PATH
+install the APIs that you need. You can install all the APIs using the git ensembl command:
+
+git ensembl --clone api
+
+# set up paths - ok ready to go...
+now lets try connecting and writing to the db
+    /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/perl5/lib/perl5/x86_64-linux
+    /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/perl5/lib/perl5
+
+# ok I think I have the hang of that....now lets make a new table and have a go at populating it along with the ensembl
+companion databases...
+
+# making me a new table
+Create new namespace
+echo "create namespace "vcfTest";"| \
+/stornext/snfs0/next-gen/Illumina_test/delete/hypertable/hypertable-0.9.7.17-linux-x86_64/opt/hypertable/current/bin/ht shell --batch
+
+Create Table
+echo "USE 'vcfTest'; CREATE TABLE vcf ( header, ID, REF, ALT , QUAL, FILTER, INFO, FORMAT, SAMPLE ); GET LISTING;"| /stornext/snfs0/next-gen/Illumina_test/delete/hypertable/hypertable-0.9.7.17-linux-x86_64/opt/hypertable/current/bin/ht shell --batch
+
+cd $SCRIPTS2
+perl -I /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl-variation/scripts/import/ import_vcf_to_NOSQL.pl \
+-i /stornext/snfs5/next-gen/scratch/simonw/Cassandra/svn_checkout/MercuryAnnotation/ScaleTest1/10-SNP.vcf \
+-source test -population british -registry /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl.registry
+
+# trying a load data infile instead - see if that works?
+cd /stornext/snfs5/next-gen/scratch/simonw/JUNK
+ /stornext/snfs0/next-gen/Illumina_test/delete/hypertable/hypertable-0.9.7.17-linux-x86_64/opt/hypertable/current/bin/ht \
+shell --batch -e 'USE "script_PopulateDB"; LOAD DATA INFILE "test.data" INTO TABLE VCFcontents;'
+# yeah that was superfast so the db is not rate limiting, just the script - which is fine
+
+So if I run this on storenext 7 I get around 23k var/min
+can I run it from a standard cluster node?
+from c81qa-10
+perl -I /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl-variation/scripts/import/ import_vcf_to_NOSQL.pl \
+-i /stornext/snfs5/next-gen/scratch/simonw/Cassandra/svn_checkout/MercuryAnnotation/ScaleTest1/11-SNP.vcf \
+-source test -population british -registry /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl.registry
+Holly shit that works too!
+I can get 20k a sec with 2 in parallel
+
+# so we now have 2 tests to do :
+1) pvcf load data infile charge chr1 - see how it scales
+2) sample level charge 1st 100 samples - lets go for 10 at a time.
+
+So lets do the pvcf 1st - need to design the table
+use "/";
+ create namespace pVCFTest;	
+ # I had to change the spelling of formatvalues to what I accidentally put into the script.				
+CREATE TABLE pvcf (  ID, REF, ALT , QUAL, FILTER, INFO, FORMAT, FORMATVLAUES );
+
+less  /users/narayanv/scratch/dnanexus/CHARGES/WES/pVCF/snps/freeze4.1_v4/CHARGE.exomes.snp.chr1.single_call.pvcf.gz \
+|perl $SCRIPTS2/pvcfTextImport.pl -out $SCRATCH/pVCFTest/chr1.data
+# whooo 150gb - lets upload it
+
+time /stornext/snfs0/next-gen/Illumina_test/delete/hypertable/hypertable-0.9.7.17-linux-x86_64/opt/hypertable/current/bin/ht \
+shell --batch -e 'USE "pVCFTest"; LOAD DATA INFILE "data.txt" INTO TABLE pvcf;'
+
+# for the pvcf thing - how do we want to manage this?
+do we want to store all the meta data for each vcf even though it is largely redundant?
+yes - probably - it will be fine 
+so lets get the list of the 1st hundred samples
+less   /users/narayanv/scratch/dnanexus/CHARGES/WES/pVCF/snps/freeze4.1_v4/CHARGE.exomes.snp.chr1.single_call.pvcf.gz | head -n 100 | grep '^#CHROM' > allSamples.txt
+more allSamples.txt | perl -lane 'my $cnt = 0;foreach my $sample (split"\t"){ $cnt++;print "$sample";last if $cnt >= 100 }' > 100Samples.txt
+
+
+# check this out 1MB slice:
+select * from VCFcontents where row regexp "chromosome:\w+:1:1\d{6}:.*";
+# 1mb slice of chr 1 all het calls
+select FORMATvalues  from VCFcontents where row regexp "chromosome:\w+:1:230\d{6}:.*" and value regexp  "^0/1.*";
+
+# how about if while the load data infile... is running I throw 10 jobs another table to see if it stresses
+
+# just make my table
+CREATE TABLE vcf (  ID, REF, ALT , QUAL, FILTER, INFO, FORMAT, SAMPLE );
+
+the compute?
+for file in 1 2 3 4 5 6 7 8 9 10 11 12 13 14
+do echo "echo \"/stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/perl/bin/perl -I $SCRATCH/Code/ensembl-variation/scripts/import/ import_vcf_to_NOSQL.pl \
+-i /stornext/snfs5/next-gen/scratch/simonw/Cassandra/svn_checkout/MercuryAnnotation/ScaleTest1/$file-SNP.vcf \
+-source test -population british -registry $SCRATCH/Code/ensembl.registry \" | $MSUB5 load.$file.out" >> scaletest.txt
+done
+
+# problems again with db - killing the poor thrify thing - still loading the other stuff though
+
+
+                 'message' => 'TSocket: timed out reading 4 bytes from 172.16.16.37:38080'
+Error storing to hypertable:
+                 'message' => 'TSocket: Could not read 4 bytes from 172.16.16.37:38080'
+               }, 'Thrift::TException' );
+Problem connecting to db :
+                 'message' => 'TSocket: Could not connect to 172.16.16.37:38080 (Connection refused)'
+    
+# however the load data infile was successful - 
+real    284m43.914s
+user    100m53.611s
+sys     4m20.274s
+
+4.7 hrs for chr1 not bad!
+how many in a 1kb slice?
+# 1kb slice of chr 1 all het calls
+select INFO  from pvcf where row regexp "^1:20000\d{4}:.*";
+
+
+So here is what I did to install on the cluster - before I could follow the instructions on the website I had to 
+upgrade ruby and get capistrano and then downgrade it and then make sure all the nodes had root@headnode1 public key
+and headnode 1 authorised keys had all the root @ hadoop-nodex keys
+THEN it worked!!!! - took all day.
+ Waiting for DFS Broker (hadoop) (localhost:38030) to come up...
+ 
+ org.hypertable.DfsBroker.hadoop.HadoopBroker <init>
+SEVERE: ERROR: Unable to establish connection to HDFS.
+
+# now trying with hbase....
+
+# just make my table
+create 'vcf',  'ID', 'REF', 'ALT' , 'QUAL', 'FILTER', 'INFO', 'FORMAT', 'SAMPLE','header'
+
+# ok lets try storing a vcf  using hbase 
+perl -I /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl-variation/scripts/import/ import_vcf_to_Hbase.pl \
+-i /stornext/snfs5/next-gen/scratch/simonw/Cassandra/svn_checkout/MercuryAnnotation/ScaleTest1/11-SNP.vcf \
+-source test -population british -registry /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl.registry
+
+# ok that works but it is *really* slow - I think I may need to look into batch inserts?
+
+# should I try to upload the big 150gb pvcf and do query tests? probably yes
+#lets make a new table for the upload
+# push it onto cluster
+hadoop fs -put t /tmp/
+
+create table pvcf  (ID STRING, REF STRING, ALT STRING , QUAL STRING, FILTER STRING, INFO STRING, FORMAT STRING, FORMATVLAUES STRING)
+STORED BY 'org.apache.hcatalog.hbase.HBaseHCatStorageHandler'
+TBLPROPERTIES (
+  'hbase.table.name' = 'pvcf',
+  'hbase.columns.mapping' = 'ID:REF,ID:ALT,ID:QUAL,ID:FILTER,ID:INFO,ID:FORMAT,ID:FORMATVLAUES',
+  'hcat.hbase.output.bulkMode' = 'true'
+);
+put this in a file
+pvcf.ddl
+ hcat -f pvcf.ddl 
+# next the import file
+A = LOAD 'hdfs:///tmp/t' USING PigStorage('\t') AS (ID:chararray, REF:chararray, ALT:chararray, QUAL:chararray, FILTER:chararray, INFO:chararray, FORMAT:chararray, FORMATVLAUES:chararray);
+-- DUMP A;
+STORE A INTO 'pvcf' USING org.apache.hcatalog.pig.HCatStorer();
+
+pig -useHCatalog importfile.txt
+172.30.18.156
+
+Some cloudera stuff
+Hive
+	
+Skipped. Cloudera Manager will create this database in a later step.
+Database Host Name: 	Database Type: 	Database Name : 	Username: 	Password:
+hadoop-headnode1.hgsc.bcm.edu:7432 		hive 	hive 	zWCIwC7tIN
+Activity Monitor
+	
+Successful
+Currently assigned to run on hadoop-headnode1.hgsc.bcm.edu.
+Database Host Name: 	Database Type: 	Database Name : 	Username: 	Password:
+hadoop-headnode1.hgsc.bcm.edu:7432 		amon 	amon 	pUTyzuHP52
+
+use hadoop-0.20 now to do filesystem stuff 
+
+I am going to try and use the hive on cloudera, how about I make the thrift libraries for perl 
+downloading hive for cloudera cdh4
+
+
+sudo rm -Rf /var/lib/flume-ng /var/lib/hadoop* /var/lib/hue /var/lib/oozie /var/lib/solr /var/lib/sqoop*
+sudo rm -Rf /dfs /mapred /yarn
+for u in hdfs mapred cloudera-scm hbase hue zookeeper oozie hive impala flume; do sudo kill $(ps -u $u -o pid=); done
+sudo rm /tmp/.scm_prepare_node.lock
+
+Hive
+	
+Skipped. Cloudera Manager will create this database in a later step.
+Database Host Name: 	Database Type: 	Database Name : 	Username: 	Password:
+hadoop-headnode1.hgsc.bcm.edu:7432 		hive 	hive 	DblWcNxO1v
+Activity Monitor
+	
+Successful
+Currently assigned to run on hadoop-headnode1.hgsc.bcm.edu.
+Database Host Name: 	Database Type: 	Database Name : 	Username: 	Password:
+hadoop-headnode1.hgsc.bcm.edu:7432 		amon 	amon 	exiY7mA2xb
+
+# so I think I have the hbase thing working - with around 10k var min at least using
+create 'vcf',  'ID', 'REF', 'ALT' , 'QUAL', 'FILTER', 'INFO', 'FORMAT', 'SAMPLE','header'
+
+How about I run a few jobs to write into it see how far I get ?
+for file in 1 2 3 4 5 6 7 8 9 10 
+do echo "echo \" /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/perl/bin/perl -I /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl-variation/scripts/import/ import_vcf_to_Hbase.pl \
+-i /stornext/snfs5/next-gen/scratch/simonw/Cassandra/svn_checkout/MercuryAnnotation/ScaleTest1/$file-SNP.vcf \
+-source test -population british -registry /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl.registry \" \
+| $MSUB out.$file.txt" >> testjobs.txt
+ done
+
+/home/hadoop/scratchcloudera-manager-installer.bin
+http://127.0.0.1:7180/cmf/home
+
+
+going to do a bigger test with Narayanan's data from charge
+lets make the 
+create 'vcf',  'ID', 'REF', 'ALT' , 'QUAL', 'FILTER', 'INFO', 'FORMAT', 'SAMPLE','header'
+
+So my script accepts a table config for the hbase to connect to
+create 'chargeVCFtest',  'ID', 'REF', 'ALT' , 'QUAL', 'FILTER', 'INFO', 'FORMAT', 'SAMPLE','header'
+
+mkdir /stornext/snfs5/next-gen/scratch/simonw/Warehouse/ChargeTest
+sug-esxa-login3:Scripts > ls ~narayanv/scratch/dnanexus/CHARGES/WES/sample_vcfs/snps/ > \
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/ChargeTest/allSamples.txt
+
+# pick 100
+head -n 100 allSamples.txt | awk '{ print "~narayanv/scratch/dnanexus/CHARGES/WES/sample_vcfs/snps/" $1 }' > 100Samples.txt
+
+# now lets build the jobs
+
+count=0
+for file in `more 100Samples.txt`
+do let count=count+1
+echo ${count}
+echo "echo \" $CODE/perl/bin/perl -I $SCRATCH/Code/ensembl-variation/scripts/import/ \
+$SCRIPTS2/import_vcf_to_Hbase.pl -i $file -source Charge -population US \
+-registry $SCRATCH/Code/ensembl.registry -table chargeVCFtest\" | $MSUB out/$count.txt" >> ChargeJobs.txt
+done
+
+# submit them in batches
+split -l 20 ChargeJobs.txt
+# 1st 20
+sh xaa
+# next 
+sh xab
+sh xac
+sh xad
+sh xae
+
+# wow I have started the last 2 together we are talking about 80 acive connections now
+
+Had 4 disconnects so far - changing the timeout settings to 1000 seconds instead of 10
+grep Thrift out/*
+out/66.txt:               }, 'Thrift::TException' );
+out/82.txt:               }, 'Thrift::TException' );
+out/83.txt:               }, 'Thrift::TException' );
+out/85.txt:               }, 'Thrift::TException' );
+going to restart these jobs...
+rm out/66.txt out/82.txt out/83.txt out/85.txt 
+
+grep Finished out/* | wc -l 
+100
+
+ok they all passed now to start developing the query interface
+
+# so the problem is the keys are sorted lexicographically this means we need to zero pad our ids but lets lose the end column
+for varinants as they have the same start and end point - we will pad up to 9 characters which will be enough for most 
+species - even monodelphis
+then it will be easy to fetch slices
+
+lets also use abbrev for the type? - look up in the db?
+
+# I just used the 1st letter - now the keys look like this:
+c:GRCh37:1:000014599:_nosqltest_B00PVACXX-4-ID05 
+
+we can squish them down some more I am sure - use unique aabrev where possible
+anyway ran the lot this time - threw 100 jobs at the cluster - so far so good
+# testing slice pvcf generation on 15 samples
+cd /stornext/snfs5/next-gen/scratch/simonw/Warehouse/ChargeTest
+
+time perl $SCRIPTS2/sliceVCFtest.pl -samples 15Samples.txt  -chr 1 -start 1000000 -end 2000000 
+real    1m15.130s
+user    0m50.821s
+sys     0m6.508s
+
+time perl $SCRIPTS2/sliceVCFtest.pl -samples 100SampleIDS.txt  -chr 1 -start 1000000 -end 2000000 > test
+
+# implement buffering, pass back a slice if the buffer gets full then repeat with the new slice
+
+Did 20Mb
+time perl $SCRIPTS2/sliceVCFtest.pl -samples 100SampleIDS.txt  -chr 1 -start 1 -end 20000000 > test
+real    14m9.652s
+user    9m42.235s
+sys     1m12.943s
+
+
+# now I am thinking I should have a look up row for each sample - analysis pair that I can use to load 
+sample level data quickly without having to use row scanner.
+
+# ok I have implemented an iterator now to test it 
+time perl $SCRIPTS2/sliceVCFtest.pl -samples 100SampleIDS.txt  -chr 1 -start 1000000 -end 2000000 > buffertest
+# that seems to work - lets try a bigger slice
+time perl $SCRIPTS2/sliceVCFtest.pl -samples 100SampleIDS.txt  -chr 1 -start 1 -end 20000000 > buffertest
+# now I am going to implement a look up to speed up single sample fetching
+
+Adding a lookup column where I will store all the rowkeys for a given sample
+create 'chargeVCFtest',  'ID', 'REF', 'ALT' , 'QUAL', 'FILTER', 'INFO', 'FORMAT', 'SAMPLE', 'HEADER', 'LOOKUP'
+took 14 min - same as last time - are they the same?
+yeah (actually one line had a different variant chosen to represent the position but otherwise identical)
+
+# ok I have implemented list fetching
+# check the old fetching still works
+time perl $SCRIPTS2/sliceVCFtest.pl -samples 3Samples.txt  -chr 1 -start 1 -end 10000 
+
+time perl $SCRIPTS2/sampleVCFtest.pl -sample  B00NYACXX-6-ID01
+# ran in 
+real    10m43.089s
+user    5m29.269s
+sys     0m52.162s
+
+it contains grep -cv "^#" singletest.vcf 
+225351 rows
+now how many in the original file?
+grep B00NYACXX-6-ID01 100Samples.txt 
+~narayanv/scratch/dnanexus/CHARGES/WES/sample_vcfs/snps/B00NYACXX-6-ID01.snps.vcf
+grep -cv "^#" ~narayanv/scratch/dnanexus/CHARGES/WES/sample_vcfs/snps/B00NYACXX-6-ID01.snps.vcf
+225351
+Now I know that they are not identical coz the ordering will be different but if we orderthem are they?
+diff singletest.vcf ~narayanv/scratch/dnanexus/CHARGES/WES/sample_vcfs/snps/B00NYACXX-6-ID01.snps.vcf
+#ooh! maybe they are identical
+# running again - this time I am going to store all the single sample row data as well
+
+create 'chargeVCFtest',  'ID', 'REF', 'ALT' , 'QUAL', 'FILTER', 'INFO', 'FORMAT', 'SAMPLE', 'HEADER', 'LOOKUP'
+
+# test another pvcf
+
+time perl $SCRIPTS2/sliceVCFtest.pl -samples 5samples.txt  -chr 1 -start 1 -end 100000000 > 5samples.pvcf
+
+# now I need to think about how to incorporate 'no data' by looking at the bam files, lets write a coverage 
+# thingamagic
+
+# going to make a new table for testing my coverage data 
+create 'coverageTest',  'ID', 'REF', 'ALT' , 'QUAL', 'FILTER', 'INFO', 'FORMAT', 'SAMPLE', 'HEADER', 'LOOKUP','COVERAGE'
+
+perl $SCRIPTS2/lowCoverageBlocks.pl -bam /stornext/snfs5/next-gen/scratch/simonw/CassandraTest/realigned.recal.bam \
+-sample test_sample
+
+# change of plan store ONLY good covergae blocks everything else will be bad - solves problems with the bam not starting 
+at position 1 coz of Ns in the reference we will only store where we know we have enough data to make a call
+perl $SCRIPTS2/goodCoverageBlocks.pl -bam /stornext/snfs5/next-gen/scratch/simonw/CassandraTest/realigned.recal.bam \
+-sample test_sample
+
+
+# so now if we store the vcf and the bam info we should have enough to call varant or no variant
+
+# its going to be important to use abrv analysis logic_names keep row keys as small as possible
+
+
+So mike has pointed me towards the adsp samples and BAMs I am going to load these
+
+Here is our ADSP ta/stornext/snfs5/next-gen/scratch/simonw/Warehouse/ADSP
+ble - going to store the BAMs and the vcfs
+create 'ADSP',  'ID', 'REF', 'ALT' , 'QUAL', 'FILTER', 'INFO', 'FORMAT', 'SAMPLE', 'HEADER', 'LOOKUP','COVERAGE'
+
+cd /stornext/snfs5/next-gen/scratch/simonw/Warehouse/ADSP
+
+# let's get them loading
+# hmm the bams look fishy I will do the vcfs first
+for file in /stornext/snfs0/next-gen/Illumina_test/delete/ADSP_500_SNPs/results/*.vcf
+do fname=$(basename $file)
+echo "echo \"$CODE/perl/bin/perl -I $SCRATCH/Code/ensembl-variation/scripts/import/ $SCRIPTS2/import_vcf_to_Hbase.pl \
+-i $file -source ADSP -population unknown -table ADSP \
+-registry $SCRATCH/Code/ensembl.registry \" | $MSUB5 out/upload.$fname.out " >> uploadVCFs.sh
+done
+
+# clear out my variation database first
+truncate table individual;
+truncate table population;
+truncate table individual_population;
+truncate table individual_synonym;
+# give it a test - ok now let them all go at once!!!!!
+
+# ok we have had massive issues with things dying
+# problems : 1 - running out of disk space WAY too fast we are at 120 gb on most of the instances based on 
+du -sh /stornext/snfs0/next-gen/Illumina_test/delete/ADSP_500_SNPs/results/
+176G
+and yet we only loaded 60 and we are at 600G already at that rate we would need 5.7 Tb
+So I think we need to *COMPRESS* the data - and limit the number of times it gets replicated
+Then I will load another 100 and see what we get to - ALSO the region servers seemed to by dying as I was writing
+the big key value pairs - lets break these up into smaller multiple writes...
+
+# so MUCH better table design
+"Try to make do with one column family if you can in your schemas. 
+Only introduce a second and third column family in the case where data access is usually column scoped; 
+i.e. you query one column family or the other but usually not both at the one time."
+"Try to keep the ColumnFamily names as small as possible, preferably one character (e.g. "d" for data/default)."
+6.3.2.3. Rowkey Length
+Keep them as short as is reasonable such that they can still be useful for required data access 
+(e.g., Get vs. Scan). A short key that is useless for data access is not better than a longer key 
+with better get/scan properties. Expect tradeoffs when designing rowkeys."
+
+Ok so let's just have data and do the rest with the keys"
+
+
+create 'ADSP', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+
+# this has delta compresion on the keys and row compression using snappy plus I have reduced the number of keys
+and the number of versions - lets see how that performs?
+
+# ok lets try the 1st 100 again see what happens this time, we are currently at around 40gb on each disk and 223 on
+the head node.
+clear out the ensembl db - 
+!!!NOW!!!! be aware that the ensembl dbIDS are going to HAVE TO BE MAINTAINED!!!!!!
+backups of those tables are essential to ensure no swaps have taken place - wait
+why not store the header column in the header key as it has the sample id? allows us to check we have what we think
+we have
+
+truncate table individual;
+truncate table population;
+truncate table individual_population;
+truncate table individual_synonym;
+
+split the jobs into batches of 10 - stagger them
+ split -l 10 uploadVCFs.sh 
+ sh xaa
+ I will start 100 over an hour say, see how they do - turns out I can only run 64 jobs so I am going to start around 200
+ and let them go see how the cluster performs, I guess tomorrow I will have to develop the code while it is still
+ loading - should be interesting.
+ 
+ So next day - disks are at around 52 gb esch so thats 12 gb *5 = 60 gb and we have stored 129 vcf successfully 
+ and are in the process of storing another 64
+ # ok well I am going to work on adapting the code to the new schema
+ # also I want to implement a slice fetch for single samples (filter of the lookup array)
+ # and I want to demonstrate the ensembl object utility
+ # I guess I will carry on streaming in the meantime
+ 
+ 
+## testing sample fetching 
+ perl $SCRIPTS2/sampleVCFtest.pl -sample A-CUHS-CU000063-BL-COL-47391BL1 -registry $SCRATCH/Code/ensembl.registry 
+
+# test sample fetching by tran (titin
+ perl $SCRIPTS2/sampleSliceTest.pl -tran ENST00000589042 -sample A-CUHS-CU000063-BL-COL-47391BL1
+
+# so 260 or so ADSP loaded successfully, 
+# now I am going to do the PGRN samples so we can test pvcf generation
+
+create 'PGRN', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+cd /stornext/snfs5/next-gen/scratch/simonw/Warehouse/PGRN
+#SNP
+for file in /stornext/snfs0/scratch-ftp/PGRN-Florida/VCF-SNP/*.vcf
+do fname=$(basename $file)
+echo "echo \"$CODE/perl/bin/perl -I $SCRATCH/Code/ensembl-variation/scripts/import/ $SCRIPTS2/import_vcf_to_Hbase.pl \
+-i $file -source PGRN -population unknown -table PGRN_SNP \
+-registry $SCRATCH/Code/ensembl.registry \" | $MSUB5 out/upload.$fname.out " >> uploadVCFs.sh
+done
+#INDEL
+for file in /stornext/snfs0/scratch-ftp/PGRN-Florida/VCF-Indel/*.vcf
+do fname=$(basename $file)
+echo "echo \"$CODE/perl/bin/perl -I $SCRATCH/Code/ensembl-variation/scripts/import/ $SCRIPTS2/import_vcf_to_Hbase.pl \
+-i $file -source PGRN -population unknown -table PGRN_INDEL \
+-registry $SCRATCH/Code/ensembl.registry \" | $MSUB5 out/upload.$fname.out " >> uploadVCFs.sh
+done
+
+#looks like it all loaded! I am amazed
+ grep Took out/* | wc -l 
+578
+wc -l uploadVCFs.sh 
+578 uploadVCFs.sh
+
+# working here $SCRATCH/PGRN
+# testing pvcf generation
+# 
+perl $SCRIPTS2/sliceVCFtest.pl -samples 15samples.txt  -chr 1 -start 1 -end 100000 -table 'PGRN' 
+
+# so what do we do with the bam ? I guess we use different databases? but then we have the problem of making sure 
+# we are reading from the same regions in both????
+# still it makes more sense to do it that way
+# 1st I need to load the bams into a table
+create 'PGRN_COV', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+
+# now I will load the bams and then I will create a different module for handling it
+
+for file in /stornext/snfs0/scratch-ftp/PGRN-Florida/BAM/*.bam
+do fname=$(basename $file)
+echo "echo \"$CODE/perl/bin/perl  $SCRIPTS2/goodCoverageBlocks.pl \
+ -table PGRN_COV -sample $fname -bam $file \" | $MSUB5 bamOut/upload.$fname.out " >> uploadBAMs.sh
+done
+# that was quick and a pretty small table in all - only 1,225,805 rows
+
+perl $SCRIPTS2/slicepVCFtest.pl -chr 1 -start 1 -end 100000 -samples sampleList.txt -table PGRN \
+-coverage 1 -ct PGRN_COV
+#looks good so far
+ grep Finished bamOut/* | wc -l 
+398
+sug-esxa-login3:PGRN > ls bamOut/* | wc -l 
+398
+# ok then here is my pVCF test
+perl $SCRIPTS2/slicepVCFtest.pl -chr 1 -start 1 -end 1000000 -samples sampleList.txt \
+-table PGRN -coverage 1 -ct PGRN_COV -vartype SNP
+
+TODO
+# check that the rows and the coverage regions come back in the correct order then do the following,
+# shift the coverage regions off the array if they are before the region we are looking at 
+# alter the coverage region slice so it always begins at the start of the chr - then we can slice however we want
+/hgsc_software/cassandra/MendelianAfterburner_v4/Filters/
+here is the PGRN pvcf
+/users/narayanv/scratch/dnanexus/pgrn2_florida/pvcf
+# so force calling gives you depth at every point 
+# our system is binary either just above or below threshold
+# we can work on this but it means we are going to need a script in the meantime to compare pvcfs to see 
+# if we are really wrong or just slightly different to the proper pVCF
+
+# so now I want to generate a pvcf at least for chr 1 - I also want to slice it to test the process works
+
+# lets do that for now
+for slice in 100000000 200000000 300000000
+do echo "echo \"/stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/perl/bin/perl \
+$SCRIPTS2/slicepVCFtest.pl -chr 1 -start " $[slice - 99999999] " -end $slice -samples sampleList.txt \
+-table PGRN -coverage 1 -ct PGRN_COV -vartype SNP \" | \
+msub -V -q analysis -l nodes=1:ppn=1,mem=5000mb -d .  -o pVCF/$slice.vcf -e pVCF/$slice.err " >> chr1Run.sh
+done
+# now lets combine them
+cd pVCF
+scp /users/narayanv/scratch/dnanexus/pgrn2_florida/pvcf/snps/snp.* .
+grep -P "^1\t" snp.single_call.annotated.vcf > snp.single_call.annotated.chr1.pvcf
+wc -l snp.single_call.annotated.chr1.pvcf 
+521 snp.single_call.annotated.chr1.pvcf
+wc -l chr1.pvcf 
+530 chr1.pvcf
+#hmm how about the other one?
+grep -P "^1\t" snp.multi_call.annotated.vcf > snp.multi_call.annotated.chr1.vcf
+ wc -l *chr1*
+     530 chr1.pvcf
+       8 snp.multi_call.annotated.chr1.vcf
+     521 snp.single_call.annotated.chr1.pvcf
+# that makes sense because ours has a header line
+so we have the same number of calls are they all the same - probably not I think the ref alt could be different
+more snp.multi_call.annotated.chr1.vcf | cut -f 1,2,4,5 >> pos1
+more chr1.pvcf | cut -f 1,2,4,5 > pos2
+# aha I can get it to work thus:
+
+
+So the positions are the same and we have the same number of them #GOOD# that means the batching is working ok
+However, the variants are different, that is something to look at
+
+# lets build a comparison script then
+perl $SCRIPTS2/comparePvcfs.pl -1 chr1.vcf -2 snp.single_call.annotated.chr1.vcf 
+
+# here is a thing, atlas excludes some reads before calling, I need to take that into account
+This is the culprit in atlas
+  IO.popen("samtools view -F 1796 -q 1  #{@SAMFile} #{@target}" ).each do |line|
+Summary:
+    read paired
+    mate unmapped
+    mate reverse strand
+    first in pair
+    second in pair
+    read fails platform/vendor quality checks
+    read is PCR or optical duplicate
+ie reads are properly paired 
+This is how to get it to work with depth
+ /hgsc_software/samtools/latest/samtools view -b -F 1796 -q 1 bam | /hgsc_software/samtools/latest/samtools depth /dev/stdin
+ 
+ # re running the bam loading using the exact atlas filter
+ # snps and indels collide - let's store them in different tables for now.
+
+create 'PGRN_SNP', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+create 'PGRN_INDEL', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+ 
+# ok loading again - that would explain some of the inconsistancies
+
+perl $SCRIPTS2/comparePvcfs.pl -1 chr1.vcf -2 snp.single_call.annotated.chr1.vcf 
+ I need to visualise some of these in igv, lets make indexes using simlinks
+ # mkdir bamSym
+for file in /stornext/snfs0/scratch-ftp/PGRN-Florida/BAM/*.bam
+do fname=$(basename $file)
+ln -s $file $fname 
+done
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/PGRN/bamSym
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/PGRN/pVCF
+
+
+# I am going to see how long it would take to produce the ADSP multi-sample vcf 
+
+whats the best way to build the slices?
+use the api of course - made my own script - 10MB slices?
+perl /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/Warehouse/Scripts/makeIIDs.pl \
+-size 10000000 > slices.txt
+
+lets consruct the commands
+for slice in 
+do echo "echo \"/stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/perl/bin/perl \
+$SCRIPTS2/slicepVCFtest.pl -chr 1 -start " $[slice - 99999999] " -end $slice -samples sampleList.txt \
+-table PGRN -coverage 1 -ct PGRN_COV -vartype SNP \" | \
+msub -V -q analysis -l nodes=1:ppn=1,mem=5000mb -d .  -o pVCF/$slice.vcf -e pVCF/$slice.err " >> chr1Run.sh
+done
+
+more slices.txt  | awk -F ":" '{ print "echo \"time /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/perl/bin/perl \
+$SCRIPTS2/slicepVCFtest.pl -chr "$3"  -start " $4 " -end "$5" -samples sampleList.txt \
+-table ADSP -vartype SNP \" | \
+msub -V -q analysis -l nodes=1:ppn=1,mem=5000mb -d .  -o pVCF/"$3"-"$4"-"$5".vcf -e pVCF/"$3"-"$4"-"$5".err " }' >> makePvcf.sh
+
+# moving the adsp pvcf to rnaseq production space before I run out of room
+# move just the finished jobs
+
+for file in `grep Finished *.err`; do echo $file |\
+ sed 's/.err:Finished/.*/' | awk '{ print "mv " $1 " /stornext/snfs5/next-gen/RNASeq/ADSP/." }' \
+ >> finishedJobs.sh; done
+ # cool that freed up a lot of space, I will zip the finished ones I guess
+ bzip2 *.vcf
+# So the run was interrupted by the downtime, now I need to figure out how to start the remaining jobs.
+How do I exclude the ones that have finished?
+
+ for file in `ls $PROD/ADSP/*err`; do fname=$(basename $file); grep "pVCF/$fname" makePvcf.sh >>finished.txt ; done
+# now do a diff ! oh snap!
+comm -13 finished.txt makePvcf.sh  > continueJobs.sh
+# I might move them all into the ADSP space though as it is quite a lot of jobs
+
+# one job got stuck in an infinite loop otherwise they all worked
+# now I need to figure out how to stick the bits together again
+# lets work in a separate directory for now so as to not fuck things up at this point
+/stornext/snfs5/next-gen/RNASeq/ADSP/pVCF
+
+make a list of chromosomes
+ls *.vcf | awk -F "-" {'print $1 }' | sort -u > chrList.txt
+# 1st add all the headers into a base file
+# check all our headers are consistant
+grep '^#' *.vcf | sort -u > header.txt
+wc -l header.txt
+
+ for chr in `more chrList.txt `;do scp header.txt pVCF/$chr.pvcf; done
+# now list them in order and copy them into the base file removing headers
+ for chr in `more chrList.txt `; do for  vcf in `ls -v $chr-*vcf`; \
+ do grep -v "^#" $vcf >> pVCF/$chr.pvcf; done; done
+ 
+# hacky but it should work ok?
+ for file in *.pvcf ; do echo "echo \"bgzip $file\" | $MSUB5 $file.zip.out" >> zip.sh ; done
+for file in *.pvcf.gz ; do echo "echo \"tabix -p vcf  $file\" | $MSUB5 $file.zip.out" >> tabix.sh ; done
+/stornext/snfs5/next-gen/RNASeq/ADSP/pVCF
+
+# how about a script to scan the table and count up how many variants we have at each position
+
+ perl $SCRIPTS2/slicepVCFtest.pl -chr GL000243.1  -start 1 -end 143341 -samples \
+ sampleList.txt -table ADSP -vartype SNP -common
+Then we could get one per chromosome and run it with Msub and then plot it on the ucsc karyotype plot
+for chr in `more chromosomes.txt`
+do /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/perl/bin/perl $SCRIPTS2/slicepVCFtest.pl 
+
+more chromosomes.txt  | awk -F ":" '{ print "echo \"time /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/perl/bin/perl \
+$SCRIPTS2/slicepVCFtest.pl -chr "$3"  -start " $4 " -end "$5" -samples sampleList.txt \
+-table ADSP -vartype SNP -common\" | \
+msub -V -q analysis -l nodes=1:ppn=1,mem=5000mb -d .  -o pVCF/"$3"-"$4"-"$5".vcf -e pVCF/"$3"-"$4"-"$5".err " }' >> makeCvcf.sh
+
+# trying to figure out generating encoded coverage using ascii cigar string combination
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/CoverageTests
+# test
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam /stornext/snfs0/scratch-ftp/PGRN-Florida/BAM/E000002.realigned.recal.bam -bin -sf 
+
+# added a threshold above which to apply the scale factor
+# how about I output the binned data and plot it against the real data to see how it looks
+# also how does it affect average coverage?
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam /stornext/snfs0/scratch-ftp/PGRN-Florida/BAM/E000002.realigned.recal.bam -bin 1 -sf 1.1 \
+-threshold 20  
+#FYI max depth I can store with a single charatcter with 20bp threshold bin = 1 and scale = 0.05 - 2,218,774
+
+# attempting to deconvolute compressed string
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-file poi  -bin 1 -sf 1.1 -threshold 20 >  deccompressed.txt
+# bigger BAM to work on
+
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam /stornext/snfs0/next-gen/ADSP-WGS-F2/dbGAPDLs/141896374.bam -bin 1 -sf 1.05 \
+-threshold 20  > poi
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-file poi  -bin 1 -sf 1.1 -threshold 20 >  deccompressed.txt
+
+# for mendelian afterburner purposes we are going to process charge data - summarise it
+# I am testing with PGRN and faking up some meta data
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/PGRN
+more sampleList.txt | grep -P "[0-4]$" | awk '{ print $1 "\tafrican" }' > p
+more sampleList.txt | grep -P -v "[0-4]$" | awk '{ print $1 "\teuropean" }' >> p
+more p | grep -P "[24680]\t" | awk '{ print $1 "\t"$2 "\tmale" }' > metaData.txt
+more p | grep -P "[13579]\t" | awk '{ print $1 "\t"$2 "\tfemale" }' >> metaData.txt
+
+
+cat pVCF/snp.multi_call.annotated.chr1.vcf | perl $SCRIPTS2/pvcfCondense.pl \
+ -meta metaData.txt -out out
+ 
+ # trying the same on a charge pVCF
+ /stornext/snfs5/next-gen/scratch/simonw/Warehouse/ChargeTest
+ here is my pvcf
+ /users/narayanv/scratch/dnanexus/CHARGES/WES/pVCF/snps/freeze4.1_v4/CHARGE.exomes.snp.chr1.single_call.pvcf.gz
+ zcat  /users/narayanv/scratch/dnanexus/CHARGES/WES/pVCF/snps/freeze4.1_v4/CHARGE.exomes.snp.chr1.single_call.pvcf.gz \
+ | head -n 100 | grep "^#CHROM" > heasder.txt
+get the samples out 
+  cut heasder.txt --complement -f 1,2,3,4,5,6,7,8,9 | tr '\t' '\n' > sampleList.txt
+  # fake the meta data 
+  more sampleList.txt | grep -P "[0-4|A-Z]$" | awk '{ print $1 "\tafrican" }' > p
+more sampleList.txt | grep -P -v "[0-4|A-Z]$" | awk '{ print $1 "\teuropean" }' >> p
+more p | grep -P "[24680|A-Z]\t" | awk '{ print $1 "\t"$2 "\tmale" }' > metaData.txt
+more p | grep -P "[13579]\t" | awk '{ print $1 "\t"$2 "\tfemale" }' >> metaData.txt
+
+# well that was easy - now to do the script
+echo "zcat /users/narayanv/scratch/dnanexus/CHARGES/WES/pVCF/snps/freeze4.1_v4/CHARGE.exomes.snp.chr1.single_call.pvcf.gz \
+| perl $SCRIPTS2/pvcfCondense.pl  -meta metaData.txt -out out" | msub -V -q analysis -l nodes=1:ppn=1,mem=15000mb -d .  -o chr1.summary -e chr.err
+
+# now I have some real meta data
+
+echo "zcat /users/narayanv/scratch/dnanexus/CHARGES/WES/pVCF/snps/freeze4.1_v4/CHARGE.exomes.snp.chr1.single_call.pvcf.gz \
+| perl $SCRIPTS2/pvcfCondense.pl  -meta CHARGEMetaData.txt -out out" | msub -V -q analysis -l nodes=1:ppn=1,mem=15000mb -d .  -o chr1.summary -e chr.err
+
+# tomek suggests I should try running on freeze 5 - didnt know there was such a thing, let's give it a go
+echo " zcat /users/narayanv/scratch/dnanexus/CHARGES/WES/pVCF/snps/freeze4.1_v5/CHARGE.exomes.snp.chr1.single_call.pvcf.annotated.vcf.gz\
+| perl $SCRIPTS2/pvcfCondense.pl  -meta CHARGEMetaData.txt -out out" | msub -V -q analysis -l nodes=1:ppn=1,mem=15000mb -d .  -o chr1.summary -e chr.err
+# lets run on everything in that case
+cd /stornext/snfs5/next-gen/scratch/simonw/Warehouse/ChargeSummary
+# single SNP calls
+for file in /users/narayanv/scratch/dnanexus/CHARGES/WES/pVCF/snps/freeze4.1_v5/*gz
+do fname=$(basename $file)
+echo " zcat $file | perl $SCRIPTS2/pvcfCondense.pl  -meta CHARGEMetaData.txt -out out" \
+| msub -V -q analysis -l nodes=1:ppn=1,mem=5000mb -d .  -o ./SNP/$fname.summary -e ./SNP/$fname.err 
+done
+
+# multi SNP calls
+for file in /users/narayanv/scratch/dnanexus/CHARGES/WES/pVCF/snps/freeze4.1_v5/multi_calls/*gz
+do  fname=$(basename $file)
+echo " zcat $file | perl $SCRIPTS2/pvcfCondense.pl  -meta CHARGEMetaData.txt -out out" \
+| msub -V -q analysis -l nodes=1:ppn=1,mem=5000mb -d .  -o ./SNP/$fname.summary -e ./SNP/$fname.err
+done
+# indels do not seem as mature as yet - I will leave them for now.
+
+make into a single file
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/ChargeSummary/SNP
+scp CHARGE.exomes.snp.chr1.single_call.pvcf.annotated.vcf.gz.summary  CHARGE.summary.txt
+grep -hv "^Chrom" CHARGE.exomes.snp.chr[2-9].*summary >> CHARGE.summary.txt
+grep -hv "^Chrom"  CHARGE.exomes.snp.chr[1-2][0-9].*summary >> CHARGE.summary.txt
+# have to sort because of the multi allelic sites
+sort -nk1,1 -nk2,2 CHARGE.summary.txt > temp
+mv temp CHARGE.summary.txt
+grep -hv "^Chrom"  CHARGE.exomes.snp.chrX*summary >> X.summary.txt
+sort -nk1,1 -nk2,2 X.summary.txt >> CHARGE.summary.txt
+grep -hv "^Chrom"  CHARGE.exomes.snp.chrY*summary >> Y.summary.txt
+sort -nk1,1 -nk2,2 Y.summary.txt >> CHARGE.summary.txt
+bgzip -c CHARGE.summary.txt > CHARGE.summary.txt.gz 
+tabix -s 1 -b 2 -e 2 -S 1 CHARGE.summary.txt.gz
+
+# storing in the database:
+# 1st make the table
+create 'CHARGE_SUMMARY', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '4', COMPRESSION => 'SNAPPY'} 
+ # storing 4 versions as we have 4 possible entries per row 3 alt alleles and '.'
+zcat $SCRATCH/ChargeSummary/SNP/CHARGE.summary.txt.gz | perl $SCRIPTS2/import_TSV_to_Hbase.pl \
+ -analysis chargeSummary -table CHARGE_SUMMARY -sample CHARGE
+ 
+Then I need a module to fetch from that table (fetch all the versions for a line)
+
+# ok that seems to work
+# lets compare to see if we have the same thing
+
+# 1st lets grab a section of the genome to compare - pick a gene, any gene...
+ENST00000425515 - 6:133017695-133161157
+perl $SCRIPTS2/sliceVStest.pl -tran ENST00000425515  -exons 0 > ENST00000425515.out
+tabix -h CHARGE.summary.txt.gz 6:133043928-133055904 > tabixTest.out
+# cleaning up the CHARGE summary to remove leading 0's - my fault in the script I did .= rather than +=
+
+zcat CHARGE.summary.txt.gz | perl -ane 'my @array = split("\t"); foreach my $cell ( @array ) { chomp $cell; if ($cell =~ /^0(\d+)/ ){$cell = $1 } print "$cell\t";}print "\n";' > CHARGE.summary.txt
+
+# re-index
+mv CHARGE.summary.txt.gz CHARGE.summary.txt.gz_bk
+bgzip -c CHARGE.summary.txt > CHARGE.summary.txt.gz 
+tabix -s 1 -b 2 -e 2 -S 1 CHARGE.summary.txt.gz
+
+perl /stornext/snfs5/next-gen/scratch/simonw/Eclipse/Scripts/tsvCompare.pl  -file1 ENST00000425515.out -file2 tabixTest.out 
+
+# here is a cute example query fetch variants overlapping exons of ENST00000425515 from african americans
+# that have a genotype call 
+perl $SCRIPTS2/sliceVStest.pl -tran ENST00000425515  -exons 1 -regex "_aa.*[0-1]/[0-1]" 
+
+# testing pheno fetching
+perl $SCRIPTS2/phenoVCFtest.pl -phenotype alzheimer -samples sampleList.txt -table "ADSP"
+
+# very intersting I am going to add a fetchByPhenotype into the Hbase adaptor and I am going to populate
+# the phenotype stuff in the shell variation database
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/Download
+rsync -av rsync://ftp.ensembl.org/ensembl/pub/current_mysql/homo_sapiens_variation_75_37/phenotype* .
+rsync -av rsync://ftp.ensembl.org/ensembl/pub/current_mysql/homo_sapiens_variation_75_37/attrib* .
+rsync -av rsync://ftp.ensembl.org/ensembl/pub/current_mysql/homo_sapiens_variation_75_37/source* .
+rsync -av rsync://ftp.ensembl.org/ensembl/pub/current_mysql/homo_sapiens_variation_75_37/study* .
+
+Cool, now to upload into the database
+gzip -d *
+mysqlimport  -h sug-esxa-db1 -u simonw -psimonw --fields_escaped_by=\\ simonw_human_37_RNASeq_rough  -L *.txt
+
+# now I can get to all the phenotype data directly
+# test of phenotype fetching
+perl /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/Warehouse/Scripts/phenoVCFtest.pl \
+-phenotype alzheimer -analysis chargeSummary -sample CHARGE -regex "_aa" > list
+
+# need to find a way to integrate meta data into the results
+
+# more coverage storing development
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam /stornext/snfs0/next-gen/ADSP-WGS-F2/dbGAPDLs/141896374.bam -bin 1 -sf 1.05 \
+-threshold 20  > poi
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-file poi  -bin 1 -sf 1.1 -threshold 20 >  deccompressed.txt
+
+# these bams are very big - lets use a typical exome bam
+# 1st need to demonstrate that the compression gives identical results over small region with read level resoloution
+# 2nd show that the binned results give very similar averages
+ln -s  /hfs02/next-gen/Illumina/Instruments/7001324/140513_SN7001324_0302_AC4APNACXX/Results/Project_140513_SN7001324_0302_AC4APNACXX/Sample_C4APNACXX-2-ID04/C4APNACXX-2-ID04.realigned.recal.bam test.bam
+
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1.05 -threshold 20  > coverage
+
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-file coverage  -bin 1 -sf 1.1 -threshold 20 >  deccompressed.txt
+
+Writing a script to verify if they are the same
+# seems to work - it is yelling at me when the depth goes above 20 - lets keep the scaling 1:1
+
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1 -threshold 1  > coverage
+# be interesting to see what happens when the depth gets above 209
+# did 16Mb of chr 1 now to decompress
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-file coverage  -bin 1 -sf 1 -threshold 1 >  deccompressed.txt
+
+perl $SCRIPTS2/compareCoverage.pl -1 deccompressed.txt -2 unccompressed.txt > poi
+# problems at 14695 - debugging mode
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1 -threshold 1  14700 > coverage
+# hmm dropped to 80 characters rather than 208 as perl seems to spazz on chars at higher levels
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-file coverage  -bin 1 -sf 1 -threshold 1 >  deccompressed.txt
+
+perl $SCRIPTS2/compareCoverage.pl -1 deccompressed.txt -2 unccompressed.txt > poi
+
+# lets do the whole of 21
+# hmm dropped to 80 characters rather than 208 as perl seems to spazz on chars at higher levels
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1 -threshold 1  -region 21:1-19000000 > coverage
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-file coverage  -bin 1 -sf 1 -threshold 1 >  deccompressed.txt
+diff deccompressed.txt unccompressed.txt
+Yay they are exactly the same So the bam is 37M
+the uncompressed coverage is 17M
+the compressed (but not zipped it 294K)
+# now lets try some scaling factors
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1 -threshold 1  -region 21:1-19000000 > coverage_0T_0P.txt
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1.1 -threshold 20  -region 21:1-19000000 > coverage_20T_10P.txt
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1.1 -threshold 10  -region 21:1-19000000 > coverage_10T_10P.txt
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1.2 -threshold 20  -region 21:1-19000000 > coverage_20T_20P.txt
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1.2 -threshold 10  -region 21:1-19000000 > coverage_10T_20P.txt
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1.3 -threshold 20  -region 21:1-19000000 > coverage_20T_30P.txt
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1.3 -threshold 10  -region 21:1-19000000 > coverage_10T_30P.txt
+294K coverage_0T_0P.txt
+139K coverage_10T_10P.txt
+129K coverage_10T_20P.txt
+124K coverage_10T_30P.txt
+148K coverage_20T_10P.txt
+129K coverage_20T_20P.txt
+135K coverage_20T_30P.txt
+
+# decompress them all so we can visualise them.
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1 -threshold 1 -file coverage_0T_0P.txt  > decompressed_coverage_0T_0P.txt
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1.1 -threshold 20 -file coverage_20T_10P.txt > decompressed_coverage_20T_10P.txt
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1.1 -threshold 10 -file coverage_10T_10P.txt > decompressed_coverage_10T_10P.txt
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1.2 -threshold 20 -file coverage_20T_20P.txt > decompressed_coverage_20T_20P.txt
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1.2 -threshold 10 -file coverage_10T_20P.txt > decompressed_coverage_10T_20P.txt
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1.3 -threshold 20 -file coverage_20T_30P.txt > decompressed_coverage_20T_30P.txt
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1.3 -threshold 10 -file coverage_10T_30P.txt > decompressed_coverage_10T_30P.txt
+grep -P -A 1000 "\t9589231\t" decompressed_coverage_* >> coveragePlot.txt
+
+# need to build an adaptor for this dataset so I can store and retrieve these data
+# going to have a meta tag and analysis parameters defining compression
+
+# testing modularised coverage 
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1 -threshold 1  -region 21:1-19000000 > p
+# decompress
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table FAKE -sample E000002 \
+-bam test.bam -bin 1 -sf 1 -threshold 1 -file p  > decompressed_p.txt
+# making a table to write to
+create 'COVERAGETEST', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '4', COMPRESSION => 'SNAPPY'} 
+perl  $SCRIPTS2/compressedCoverageBlocks.pl  -table FAKE -sample E000002 -bam test.bam -bin 1 \
+-sf 1 -threshold 1  -region 21:1-19000000 -table COVERAGETEST > p
+perl  $SCRIPTS2/decompressCoverageBlocks.pl  -table COVERAGETEST -sample E000002 \
+-bam test.bam -bin 1 -sf 1 -threshold 1 -region 21:1:100000
+
+# ok lets not worry about that at the moment, for now can we store gvcf in the normal way?
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/gVCF
+# here are the gVCFs
+/stornext/snfs0/next-gen/Illumina_test/delete/ADSP_500_SNPs/results_GATK/combine_gVCFs/all_584_zipped
+# sym link it for convenience
+ ln -s /stornext/snfs0/next-gen/Illumina_test/delete/ADSP_500_SNPs/results_GATK/combine_gVCFs/all_584_zipped gVCFs
+ ln -s  /stornext/snfs0/next-gen/Illumina_test/delete/ADSP_500_SNPs/results_GATK/combine_gVCFs_prod/ pVCFs
+# ok lets see if I can load one
+create 'ADSP_gVCF', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+ 
+for file in gVCFs/*.gz
+do  fname=$(basename $file)
+echo "echo \"$CODE/perl/bin/perl -I $SCRATCH/Code/ensembl-variation/scripts/import/ $SCRIPTS2/import_vcf_to_Hbase.pl \
+-i $file -source PGRN -population ADSP -table ADSP_gVCF \
+-registry $SCRATCH/Code/ensembl.registry -analysis gVCFUpload --chrom_regexp 21 \" | $MSUB5 out/upload.$fname.out " >> importgVCF.sh
+done
+
+# now we have to figure out how to make a multi sample vcf using this sort of data - lets load a 2nd sample
+# hmm these might be a bit big for testing purposes?
+# going to implement range fetching (useful for gVCF but also could have other uses ) + meta data to hold
+sample and analysis name (in case we lose the mysql db and write start and end time so we know if finished correctly.
+# going to work with PGRN data for convenience.
+create 'PGRN_gVCF', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+ 
+ cd /stornext/snfs5/next-gen/scratch/simonw/Warehouse/gVCF
+ find /stornext/snfs0/next-gen/Illumina_test/delete/Helis_steve_pVCF/HC_results -type f -iname '*.g.vcf' >> samples.txt
+for file in `more samples.txt`
+do  fname=$(basename $file)
+echo "echo \"$CODE/perl/bin/perl -I $SCRATCH/Code/ensembl-variation/scripts/import/ $SCRIPTS2/import_vcf_to_Hbase.pl \
+-i $file -source PGRN -population PGRN -table PGRN_gVCF \
+-registry $SCRATCH/Code/ensembl.registry -analysis gVCFUpload  \" | $MSUB5 out/upload.$fname.out " >> importgVCF.sh
+done
+
+# trying slice fetching for pVCF generation
+for file in `more samples.txt`
+do  fname=$(basename $file)
+echo $fname | sed 's/.g.vcf//' >> sampleNames.txt
+done
+
+# trying to figure out the very complicated ref alt situation where you have multiple do-dahs
+
+perl /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/Warehouse/Scripts/sliceVCFtest.pl\
+ -chr 1 -start 121485240 -end 121485250 -samples sampleNamesSmall.txt -table PGRN_gVCF -analysis gVCFUpload  > test
+ 
+ Things to do
+ =-=-=-=-=-=-=
+ 
+ Liftover	- 	Should be fairly easy just need an implementation in the Hbase table
+ 
+ Annotation tables	-	Special tables for annotation, include ref and alt in the rowkey
+ 				One table per source - lets start with dbSNP...
+ 				
+ Doing lifotver 1st - test it
+ 
+ perl $SCRIPTS2/liftOverTest.pl -sample 25513 -liftover NCBI36  -table 'PGRN_gVCF' -analysis gVCFUpload
+ 
+
+ # wiping out the tables and starting again, the code has changed to such an extent that the old tables were
+ getting to be useless anyway - re-loading the PGRN samples
+ 
+
+# going to upload my code to github before I lose it all

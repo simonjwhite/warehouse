@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<includepath>
+  <includepathentry path="/Users/simonw/git/ensembl-pipeline/modules" />
+  <includepathentry path="/Users/simonw/git/ensembl-analysis/modules" />
+  <includepathentry path="/Users/simonw/git/ensembl-analysis/scripts" />
+  <includepathentry path="/Users/simonw/git/ensembl-variation/modules" />
+  <includepathentry path="/Users/simonw/git/ensembl-variation/scripts" />
+  <includepathentry path="/Users/simonw/git/ensembl/modules" />
+  <includepathentry path="/Users/simonw/Documents/workspace/BioPerl/bioperl-live" />
+</includepath>
+

@@ -1,0 +1,52 @@
+#!/usr/bin/env perl
+# Copyright [1999-2014] Wellcome Trust Sanger Institute and the EMBL-European Bioinformatics Institute
+# 
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+# 
+#      http://www.apache.org/licenses/LICENSE-2.0
+# 
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+use Bio::EnsEMBL::DBSQL::DBAdaptor;
+use Bio::EnsEMBL::Variation::DBSQL::DBAdaptor;
+use Bio::EnsEMBL::Registry;
+
+##mysql -uensadmin -pensembl -hia64g -e"create database yuan_chicken_var_36";
+##mysql -uensadmin -pensembl -hia64g yuan_chicken_var_36 < ../../sql/table.sql
+
+Bio::EnsEMBL::DBSQL::DBAdaptor->new
+  ( '-species' => "Homo_sapiens",
+    '-group'   => "core",
+    '-port'    => 3364,
+    '-host'    => 'localhost',
+    '-user'    => 'root',
+    '-pass'    => 'password',
+    '-dbname'  => 'homo_sapiens_core_75_37',
+      );
+Bio::EnsEMBL::Variation::DBSQL::DBAdaptor->new
+  ( '-species' => "Homo_sapiens",
+    '-group'   => "variation",
+    '-port'    => 3306,
+        '-host'    => 'localhost',
+        '-user'    => 'root',
+    '-pass'    => 'password',
+
+    '-dbname'  => 'homo_sapiens_variation_75_37', );
+
+Bio::EnsEMBL::Registry->add_alias("Homo_sapiens","human");
+Bio::EnsEMBL::Registry->add_alias("Mus_musculus","mouse");
+Bio::EnsEMBL::Registry->add_alias("Rattus_norvegicus","rat");
+Bio::EnsEMBL::Registry->add_alias("Gallus_gallus","chicken");
+Bio::EnsEMBL::Registry->add_alias("Canis_familiaris","dog");
+Bio::EnsEMBL::Registry->add_alias("Danio_rerio","zebrafish");
+Bio::EnsEMBL::Registry->add_alias("Pan_troglodytes","chimp");
+Bio::EnsEMBL::Registry->add_alias("Anopheles_gambiae","mosquitos");
+Bio::EnsEMBL::Registry->add_alias("Tetraodon_nigroviridis","tetraodon");
+Bio::EnsEMBL::Registry->add_alias("Fugu_rubripes","fugu");
+1;
