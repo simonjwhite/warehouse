@@ -22,7 +22,7 @@ sub new {
   	# override the superclass namespace if defined
   	$self->namespace($table);
   	# want to return a hash object
-  	$self->type('hash');
+  	$self->type('text');
 	return $self;
 }
 
@@ -35,32 +35,14 @@ sub vcfFromSample {
 	# lists are split into sections, generate the keys to 
 	# pull down each section untill you reach the end
 
-	# header
-	my $header = $self->getHeader($sample);
-	print "$header";
-			
 	my $iterator = $self->fetchAllBySample($sample);
 	while (my $data = $iterator->nextList){
-	  # now loop through them line by line
-	  # fortunately the keys are sorted
-	  return unless $data;
-	  foreach my $hash (@{$data}) {
-	  		$self->throw("blah ")
-	  			unless $hash;
-	  		my $d = $self->parseRowKey($hash);
-			my $chr = $d->{"CHR"};
-			my $pos = $d->{"START"};
-
-			# remove 0 padding from numbers
-			$pos =~ s/^0+//;
-			# columns
-			my $ch = $hash->{'columns'};
-			print "$chr\t$pos\t";
-			my $line =  $ch->{"D:"}->{'value'};
-			print "$line\n";
+		foreach my $line (@$data) {
+			print $line;
 		}
 	}
 }
+
 
 
 1;

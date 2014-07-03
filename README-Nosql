@@ -1006,3 +1006,267 @@ echo "zcat ../DataSourcesMar14/ALL.wgs.integrated_phase1_v3.20101123.snps_indels
 msub -V -q analysis -l nodes=1:ppn=1,mem=5000mb -d .  -o 1KG_import.txt -e 1KG_meta.txt
 
 # look into bulk upload and annotation tomorrow
+move it into my warehouse scratch
+ 
+ So now how to do a bulk import?
+ #THIS IS HOW TO GET ROOT ACCESS PASSWORD#
+ sudo ssh hadoop-headnode1
+ # make an import directory
+ sudo -u hdfs /usr/bin/hadoop-0.20 fs -mkdir /Import
+ # import locally first then into hdfs 
+ scp  1KG_import.txt  hadoop@hadoop-headnode1:/home/hadoop/Import/.
+ scp  dbSNP_import.txt  hadoop@hadoop-headnode1:/home/hadoop/Import/.
+ # needed to move it to an HDFS owned directory for some reason
+ # might want to directly load it into here in future
+ # log in as root
+ sudo ssh hadoop-headnode1
+ mkdir /HdfsImport
+ chown hdfs:hdfs HdfsImport/
+ cd HdfsImport/
+ scp /home/hadoop/Import/* .
+ 
+ # then copy to hdfs 
+ cd /HdfsImport
+ sudo -u hdfs hadoop-0.20 fs -copyFromLocal /HdfsImport/*  /Import
+ # works!
+ # ok now to format these files for import
+ # somthing like this...
+ bin/hbase org.apache.hadoop.hbase.mapreduce.ImportTsv -Dimporttsv.columns=a,b  <hdfs-data-inputdir>
+ # let us make a table
+ 
+ create '1KG_Annotation', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+ create 'DBSNP_Annotation', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+  
+  hbase org.apache.hadoop.hbase.mapreduce.ImportTsv '-Dimporttsv.separator=\t' \
+  -Dimporttsv.columns=HBASE_ROW_KEY,D 1KG_Annotation /Import/1KG_import.txt
+  
+  hmm I am giving up - some misconfiguration is costing me a lot of time here, going to use the thrift client and a script instead
+   ah wait - the job tracker is not started
+   From the Cloudera site :
+   If you're starting the JobTracker from a console, you must start it as the mapred user. For example:
+
+ sudo -u mapred hadoop-0.20 jobtracker
++================================================================+
+|      Error: HADOOP_HOME is not set correctly                   |
++----------------------------------------------------------------+
+| Please set your HADOOP_HOME variable to the absolute path of   |
+| the directory that contains hadoop-core-VERSION.jar or         |
+| share/hadoop/mapreduce1/hadoop-core-VERSION.jar.               |
++================================================================+
+  export HADOOP_HOME=opt/cloudera/parcels/CDH-5.0.2-1.cdh5.0.2.p0.13/lib/hadoop/client-0.20/
+  
+  no this is too complicated YARN is what I am using which is a replacement for MR1 which is something to do with the jobtracker
+  Forget it - let's upload it myself.
+  
+  
+  
+  cd $SCRATCH/HbaseImport
+# dbsnp
+echo "zcat /stornext/snfs5/next-gen/scratch/simonw/Cassandra/svn_checkout/MercuryAnnotation/DataSourcesMar14/00-All.vcf.gz | \
+/stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/perl/bin/perl -I /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/vcftools_0.1.11/perl/ \
+$SCRIPTS2/importAnnotationHbase.pl -tags RS,CLNSIG, -blank -info -hbase -table DBSNP_Annotation -upload" | $MSUB5 dbsnp.out
+
+# 1000kg
+echo "zcat /stornext/snfs5/next-gen/scratch/simonw/Cassandra/svn_checkout/MercuryAnnotation/DataSourcesMar14/ALL.wgs.integrated_phase1_v3.20101123.snps_indels_sv.sites.vcf.gz | \
+/stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/perl/bin/perl -I /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl/vcftools_0.1.11/perl/ \
+$SCRIPTS2/importAnnotationHbase.pl --tags AMR_AF,ASN_AF,AFR_AF,EUR_AF,AF,AA  -table 1KG_Annotation -upload" | $MSUB5 1Kg.out
+  
+ # ok lets modify Hbase to add annotation if requested
+  perl $SCRIPTS2/liftOverTest.pl -sample E000134     -table 'PGRN_SNP' \
+  -analysis PGRNUpload -annotation DBSNP_Annotation,1KG_Annotation > test.vcf
+  
+ # I am reloading the normal PGRN data as it is easier to deal with
+ create 'PGRN_SNP', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+ 
+ # let's get some more datasources loading shall we?
+ 
+ 
+ 
+ # doing some more pVCF testing
+perl $SCRIPTS2/slicepVCFtest.pl -chr 1  -start 10000000 -end 11000000 -samples PGRNSamples.txt -table PGRN_SNP -vartype SNP
+
+ # WHHHOOOOA!
+ look at this impala stuff
+ 
+ # so it looks like I might be able to do querying of the data but it may require a schema change 1st.
+ # how do we deal with the complexities of the data?
+ # had to do this:
+  http://www.cloudera.com/content/cloudera-content/cloudera-docs/CM4Ent/latest/Cloudera-Manager-Managing-Clusters/cmmc_Impala_service.html
+ [impala]
+server_host=<impalad_hostname>
+server_port=21000
+ CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	HMP14.trim3P6_1bp
+ I think I may have to make new column names in hbase otherwise this is not going to work
+  create 'VCF_TEST',  {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+I think we can define the columns as we load them - no need for a schema , just the freaking column families
+
+Lets try and store a vcf like this
+# so that works like a dream, now I will have to modify the format methods to reassamble the vcf from the columns I have
+
+# lets try and import the annotation in the same way
+ create '1KG', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+ create 'DBSNP', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+  # now import it like a normal vcf
+
+ echo "zcat /stornext/snfs5/next-gen/scratch/simonw/Cassandra/svn_checkout/MercuryAnnotation/DataSourcesMar14/00-All.vcf.gz | \
+ /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl//perl/bin/perl -I /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl-variation/scripts/import/ \
+ /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/Warehouse/Scripts/import_vcf_to_Hbase.pl  -source DBSNP -population DBSNP -analysis DBSNP \
+ -table DBSNP -nolookup -registry /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl.registry " | \
+ msub  -V  -q analysis -l nodes=1:ppn=1,mem=5000mb -d . -j oe -o  DNSNP.out
+ 
+  echo 'zcat /stornext/snfs5/next-gen/scratch/simonw/Cassandra/svn_checkout/MercuryAnnotation/DataSourcesMar14/ALL.wgs.integrated_phase1_v3.20101123.snps_indels_sv.sites.vcf.gz  | \
+ grep -v "VT=SV" | /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl//perl/bin/perl -I /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl-variation/scripts/import/ \
+ /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/Warehouse/Scripts/import_vcf_to_Hbase.pl  -source 1KG -population 1KG -analysis 1KG \
+ -table 1KG -nolookup -registry /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl.registry ' | \
+ msub  -V  -q analysis -l nodes=1:ppn=1,mem=5000mb -d . -j oe -o  1KG.out
+ # what else? How about HGMD?
+ # hmm their vcf is weird!!!
+ 
+ 
+ # trying a tabix of vep cache see if it could be useful
+ cd /stornext/snfs5/next-gen/scratch/simonw/Vep/Download
+ perl variant_effect_predictor/ensembl-tools-release-75/scripts/variant_effect_predictor/convert_cache.pl -species homo_sapiens -version 75 -dir .
+ 
+  # hmm that is sort of interesting, I think it would be nice to have snp consequences though
+  # is there any reason why we could not add the genome as a table
+  # plus any SNP consequences 
+  
+     # reloading some of the ADSP data - it will be better to work with
+   create 'ADSP', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+ 
+  # 1st lets run some multi sample vcf tests so I can congigure the text formatting properly again
+   
+   perl $SCRIPTS2/sampleSliceTest.pl -tran ENST00000375217 -sample A-CUHS-CU000174-BL-COL-41307BL1  -analysis ADSP -table ADSP   
+   
+   perl $SCRIPTS2/sampleVCFtest.pl -sample R007054 -analysis PGRNUpload -table PGRN_SNP
+   
+   perl $SCRIPTS2/phenoVCFtest.pl -phenotype alzheimers* -sample A-CUHS-CU000174-BL-COL-41307BL1  -table ADSP -analysis ADSP
+
+  # so here is the thing, we need to decide between denormalised data that is big in storage but fast in query
+  and normalised data ( just a string) which compresses well but is probably going to be slower to query
+  Lets test both theories, clear out the db - load the same sample set stored both ways and see how fast it
+  queries
+   # useful this:
+    hdfs dfs -du -h /hbase/data/default
+   229.3 M  /hbase/data/default/1KG
+360.5 M  /hbase/data/default/CHARGE_SUMMARY
+234.4 K  /hbase/data/default/COVERAGETEST
+231.4 M  /hbase/data/default/DBSNP
+320      /hbase/data/default/PGRNTEST
+188.4 M  /hbase/data/default/PGRN_SNP
+370.2 M  /hbase/data/default/PGRN_gVCF
+3.3 M    /hbase/data/default/analytics_demo
+285.6 K  /hbase/data/default/document_demo
+
+So lets store the PGRN data as a simple format - see what happens 
+
+create 'PGRN_SMALL', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+
+ hdfs dfs -du -h /hbase/data/default
+
+58.2 M   /hbase/data/default/PGRN_SMALL
+188.4 M  /hbase/data/default/PGRN_SNP
+
+Aha! its a lot smaller thats for sure
+ So the question is whats it like in terms of querying?
+ The folder the VCFs live in is 256M
+ So how does that work then?
+
+# 1st make the denormalised table 
+drop table if exists PGRN_SMALL_TEST;
+CREATE EXTERNAL TABLE PGRN_SMALL_TEST(key string,data string)
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+WITH SERDEPROPERTIES ("hbase.columns.mapping" =  ":key,D:TEXT")
+TBLPROPERTIES ("hbase.table.name" = "PGRN_SMALL");
+   
+# now the normalised one
+drop table if exists PGRN_LARGE_TEST;
+CREATE EXTERNAL TABLE PGRN_LARGE_TEST(key string,alt string,chrom string,dp string,filt string,gt string,pos string,qual string,ref string,vr string )
+STORED BY 'org.apache.hadoop.hive.hbase.HBaseStorageHandler'
+WITH SERDEPROPERTIES ("hbase.columns.mapping" =  ":key,D:ALT,D:CHROM,D:DP,D:FILTER,D:GT,D:POS,D:QUAL,D:REF,D:VR ")
+TBLPROPERTIES ("hbase.table.name" = "PGRN_SNP");
+
+# count the genotypes by chromosome 
+1:large (tidy)
+select count(*), chrom, gt
+from PGRN_LARGE_TEST
+group by chrom, gt
+HIVE = 1m35
+IMPALA = dies
+
+2: small (messy)
+select split(key,":")[2] as chr, split(split(data,"\t")[6],":")[0] as gt
+from PGRN_SMALL_TEST
+group by split(key,":")[2],split(split(data,"\t")[6],":")[0]
+HIVE = 20s 
+IMPALA = dies
+
+# is it really faster?
+# lets try that again
+# might want to check its not caching anything
+# if so can we use maps to make things tidyer?
+# yep the results are almost exactly the same so the messy one is both smaller and faster - win win
+
+# try a bigger test
+select count(*), vr
+from PGRN_LARGE_TEST
+group by vr
+84 seconds - not bad
+
+select count(*), split(split(data,"\t")[7],":")[1] as vr
+from PGRN_SMALL_TEST
+group by split(split(data,"\t")[7],":")[1]
+90 seconds - aha!
+
+what about ?
+select count(*),chrom, vr
+from PGRN_LARGE_TEST
+group by chrom, vr
+93 seconds
+
+select count(*),split(key,":")[2], split(split(data,"\t")[7],":")[1] as vr
+from PGRN_SMALL_TEST
+group by split(key,":")[2],split(split(data,"\t")[7],":")[1]
+90 seconds 
+
+# anyway having the small structure seems to be at least as quick as the larger structure - let's get on and load some whopping data set -charge vcf I recon, just the samples
+
+# might need to do something like this for IMPALA
+select count(*), regexp_extract(key,"c:\S+:(\S+):.+",0) as chr
+from PGRN_SMALL_TEST
+group by chr
+# rather than split.
+# anyway lets see about loading the charge pvcf, going to be a bit different this one I should think
+# here are the pVCFs   /users/narayanv/scratch/dnanexus/CHARGES/WES/pVCF/snps/freeze4.1_v5/
+
+lets try and generate the upload
+for file in /users/narayanv/scratch/dnanexus/CHARGES/WES/pVCF/snps/freeze4.1_v5/*.gz
+do fname=$(basename $file)
+echo "echo \"zcat $file | /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl//perl/bin/perl -I \
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl-variation/scripts/import/ \
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/Warehouse/Scripts/import_vcf_to_Hbase.pl \
+-source CHARGE -population CHARGE -analysis CHARGE -table CHARGEPVCF --simpleStore \
+-registry /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl.registry \" \
+| msub  -V  -q analysis -l nodes=1:ppn=1,mem=5000mb -d . -j oe -o  out/$fname.out " >> uploadChargepVCF.sh
+done
+create 'CHARGEPVCF', {NAME => 'D', DATA_BLOCK_ENCODING => 'FAST_DIFF', VERSIONS => '2', COMPRESSION => 'SNAPPY'} 
+
+
+# test command - 100 lines
+zcat /users/narayanv/scratch/dnanexus/CHARGES/WES/pVCF/snps/freeze4.1_v5/CHARGE.exomes.snp.chrY.single_call.pvcf.annotated.vcf.gz \
+|  /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl//perl/bin/perl -I \
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl-variation/scripts/import/ \
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/Warehouse/Scripts/import_vcf_to_Hbase.pl \
+-source CHARGE -population CHARGE -analysis CHARGE -table CHARGEPVCF --simpleStore --pvcf \
+-registry /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl.registry 
+
+# make it smaller
+zcat /users/narayanv/scratch/dnanexus/CHARGES/WES/pVCF/snps/freeze4.1_v5/CHARGE.exomes.snp.chr10.single_call.pvcf.annotated.vcf.gz \
+| head -n 200 | cut -f 1-15 > small.vcf
+
+cat small.vcf |  /stornext/snfs5/next-gen/scratch/simonw/Local/Ensembl//perl/bin/perl -I \
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl-variation/scripts/import/ \
+/stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/Warehouse/Scripts/import_vcf_to_Hbase.pl \
+-source CHARGE -population CHARGE -analysis CHARGE -table CHARGEPVCF --simpleStore --pvcf \
+-registry /stornext/snfs5/next-gen/scratch/simonw/Warehouse/Code/ensembl.registry 
+

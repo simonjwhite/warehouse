@@ -12,11 +12,15 @@ my $cursor = "";
 sub new {
 	my ( $class, @args ) = @_;
 	my $self = bless {}, $class;
-	my ( $type, $con, $buffer, $analysis, $sample, $versions, $ass, $liftover )
+	my (
+		 $type,     $con, $buffer,   $analysis, $sample,
+		 $versions, $ass, $liftover, $annotation
+	  )
 	  = rearrange(
 				   [
 					 'TYPE',   'CON',      'BUFFER',   'ANALYSIS',
-					 'SAMPLE', 'VERSIONS', 'ASSEMBLY', 'LIFTOVER'
+					 'SAMPLE', 'VERSIONS', 'ASSEMBLY', 'LIFTOVER',
+					 'ANNOTATION'
 				   ],
 				   @args
 	  );
@@ -39,6 +43,7 @@ sub new {
 	$self->sample( $self->getSample($sample) )       if $sample;
 	$self->analysis( $self->getAnalysis($analysis) ) if $analysis;
 	$self->liftover($liftover)                       if $liftover;
+	$self->annotation($annotation);
 
 	# store in the hash as well
 	$self->analysisList( [$analysis] ) if $analysis;
@@ -54,7 +59,7 @@ sub sampleList {
 	  unless $list
 	  and ref($list) eq "ARRAY";
 	foreach my $sam (@$list) {
-
+		next unless $sam;
 		# fetch from the db
 		my $sam = $self->getSample($sam);
 		$hash{ $sam->dbID } = $sam;
@@ -123,7 +128,7 @@ sub getSampleKeyList {
 		my $row =
 		  $self->analysis->dbID . ":" . $sample->dbID . ":LOOKUP:$batch";
 		my $data = $self->tableOperation( 'getRow', $row );
-		$str = $data->[0]->{'columns'}->{'D:'}->{'value'};
+		$str = $data->[0]->{'columns'}->{'D:LOOKUP'}->{'value'};
 		if ($str) {
 			push( @keyList, split( "_", $str ) );
 		}
@@ -143,7 +148,20 @@ sub getHeader {
 	my $sample = $self->getSample($sample);
 	my $row    = $self->analysis->dbID . ":" . $self->sample->dbID . ":HEADER";
 	my $data   = $self->tableOperation( 'getRow', $row );
-	my $header = $data->[0]->{'columns'}->{'D:'}->{'value'};
+	my $header = $data->[0]->{'columns'}->{'D:HEADER'}->{'value'}; 
+	# also fetch any for annotation sources
+	if ( my $tables = $self->annotation){
+		my @header = split("\n",$header);
+		my $sampleLine = pop(@header);
+		foreach my $table ( @$tables){
+			$data =  $self->tableOperation( 'getRow', 'INFO',undef,undef,$table );
+			my $line = $data->[0]->{'columns'}->{'D:HEADER'}->{'value'};
+			chomp $line;
+			push(@header,  $line);
+		}
+		push(@header,$sampleLine);
+		$header = join("\n",@header);
+	}
 	return $header;
 }
 
@@ -153,7 +171,7 @@ sub getMeta {
 	my $sample   = $self->sample;
 	my $row      = $self->analysis->dbID . ":" . $self->sample->dbID . ":META";
 	my $data = $self->tableOperation( 'getRow', $row );
-	my $meta = $data->[0]->{'columns'}->{'D:'}->{'value'};
+	my $meta = $data->[0]->{'columns'}->{'D:META'}->{'value'};
 	return $meta;
 }
 
@@ -174,7 +192,6 @@ sub fetchBySampleSlice {
 		my $key = $keyList->[$i];
 		my ( $cs, $asm, $chr, $start, $end ) = split( ":", $key );
 		next unless $slice->seq_region_name eq $chr;
-
 		# use end position if supplied
 		$end = $start unless $end;
 		next unless $end >= $slice->start;
@@ -222,7 +239,7 @@ sub fetchBySlice {
 }
 
 sub storeData {
-	my ( $self, $cs, $chr, $start, $end, $value ) = @_;
+	my ( $self, $cs, $chr, $start, $end, $value, $meta ) = @_;
 
 	# basic storage method
 	# test that the data must is complient with the allowed format
@@ -252,7 +269,8 @@ sub storeData {
 	# make a lookup key and a full key
 	my $lookup = "$cs:" . $self->assembly . ":$chr:$start:$end";
 	my $key    = "$lookup:" . $self->analysis->dbID . ":" . $self->sample->dbID;
-
+	# meta data replaces sample id with META
+	$key    = "$lookup:" . $self->analysis->dbID . ":META" if $meta;
 	#	print "$key\t$value\n";
 	# add a separator to the lookup
 	$lookup .= "_";
@@ -261,16 +279,17 @@ sub storeData {
 }
 
 sub _store {
-	my ( $self, $key, $value ) = @_;
+	my ( $self, $rowKey, $kvs ) = @_;
 
 	# private method to write to the db
 	my $mutations;
 	eval {
-		push @{$mutations},
-		  Hbase::Mutation->new( { column => 'D:', value => $value } );
+		foreach my $key ( keys %$kvs){
+			push @{$mutations},  Hbase::Mutation->new( { column => "D:$key", value => $kvs->{$key} } );
+		}
 
 		#print STDERR "Storing " . $self->namespace, " $key, $mutations\n";
-		$self->tableOperation( 'mutateRow', $key, $mutations );
+		$self->tableOperation( 'mutateRow', $rowKey, $mutations );
 	};
 	if ($@) {
 		$self->throw("Error storing to Hbase:\n$@\n");
@@ -283,9 +302,9 @@ sub storeMeta {
 
 	# store meta data
 	my $key = $self->analysis->dbID . ":" . $self->sample->dbID . ":META";
-
+	my $hash->{META} = $meta;
 	#print "$key\t$meta\n";
-	$self->_store( $key, $meta );
+	$self->_store( $key, $hash );
 	return;
 }
 
@@ -363,9 +382,9 @@ sub storeHeader {
 
 	# store meta data
 	my $key = $self->analysis->dbID . ":" . $self->sample->dbID . ":HEADER";
-
+	my $hash->{HEADER} = $header;
 	#print "$key\t$header\n";
-	$self->_store( $key, $header );
+	$self->_store( $key, $hash );
 	return;
 }
 
@@ -377,9 +396,9 @@ sub storeLookup {
 	# store meta data
 	my $key =
 	  $self->analysis->dbID . ":" . $self->sample->dbID . ":LOOKUP:$batch";
-
+	my $hash->{LOOKUP} = $lookup;
 	#print "$key\t$lookup\n";
-	$self->_store( $key, $lookup );
+	$self->_store( $key, $hash );
 	return;
 }
 
@@ -729,7 +748,7 @@ sub fetchByTranscript {
 }
 
 sub fetchBySampleTranscript {
-	my ( $self, $sample_name, $tran, $exons ) = @_;
+	my ( $self, $sample_name, $tran, $exons ,$cds) = @_;
 	my $output;
 	my $start = 0;
 	my $ta    =
@@ -748,11 +767,14 @@ sub fetchBySampleTranscript {
 				push @{$output}, $o if $o;
 			}
 		}
+		return $output;
 	}
-
+	
+	my @exons = 	@{ $transcript->get_all_Exons() };
+	@exons = 	@{ $transcript->get_all_translateable_Exons() } if $cds;
 	# otherwise just fetch exon regions
 	foreach my $e ( sort { $a->start <=> $b->start }
-					@{ $transcript->get_all_Exons() } )
+					@exons )
 	{
 		my ( $iterator, $s ) =
 		  $self->fetchBySampleSlice( $sample_name, $e->feature_Slice, $start );
@@ -771,14 +793,14 @@ sub fetchBySampleTranscript {
 }
 
 sub tableOperation {
-	my ( $self, $op, $value1, $value2, $value3 ) = @_;
+	my ( $self, $op, $value1, $value2, $value3,$table ) = @_;
 	my $client = $self->dbc->client;
-
+	$table = $self->namespace() unless $table;
 # eval the operation
-#	print STDERR "Running client->$op('".$self->namespace."','".$value1,$value2,$value3."')\n";
+	#print STDERR "Running client->$op('".$table."','".$value1,$value2,$value3."')\n";
 	my $result;
 	eval {
-		$result = $client->$op( $self->namespace, $value1, $value2, $value3 );
+		$result = $client->$op( $table, $value1, $value2, $value3 );
 	};
 	if ($@) {
 		$self->throw(   "Error running $op on table "
@@ -816,6 +838,15 @@ sub liftoverData {
 
 	# fetch coord system we want to map to
 	my $cst = $csa->fetch_by_name( $hash->{'CS'}, $self->liftover );
+	unless ( $cst){
+		print STDERR "Variant liftover  "
+			  . $hash->{"ASS"} . ":"
+			  . $hash->{"CHR"} . ":"
+			  . $hash->{"START"} . "-"
+			  . $hash->{"END"} . " not mapped. Cannot find coord system mapping for assembly  ". 
+			  $self->liftover ." and coordsystem " . $hash->{'CS'} . "\n";
+			  return ;
+	}
 	my $asm_mapper = $asma->fetch_by_CoordSystems( $csf, $cst );
 
 	# variants rather than ranges
@@ -862,7 +893,6 @@ sub liftoverData {
 			# also need to change the END column if it exists in the VCF
 			my $ch = $data->{'columns'};
 			my @line = split( "\t", $ch->{"D:"}->{'value'} );
-			 
 			if ( $line[5] =~ /^END=\d+$/ ) {
 				$line[5] = "END=" . $c->end;
 
@@ -889,8 +919,17 @@ sub liftoverData {
 # do any processing to the data before we format it
 sub process {
 	my ( $self, $data ) = @_;
-
 	# do we want to add any annotation?
+	my $annotation = $self->annotation;
+	if ( $annotation && scalar(@$annotation) > 0 ) {
+
+		# do a fast lookup of this variant
+		# in the appropriate table
+		foreach my $table (@$annotation) {
+			$data = $self->annotate( $data, $table );
+		}
+	}
+
 	# do we want to liftover?
 	if ( $self->liftover ) {
 		$data = $self->liftoverData($data);
@@ -901,6 +940,45 @@ sub process {
 
 	# do the formatting
 	return $self->format($data);
+}
+
+sub annotate {
+	my ( $self, $data, $table ) = @_;
+	my $rk   = $data->{'row'};
+	my $hash = $self->parseRowKey($data);
+	my $tables = $self->annotation();
+	# only annotate single positions
+	return $data if $hash->{'END'} && $hash->{'END'} != $hash->{'START'}; 
+	my $newKey;
+
+	# remove the analysis:sample ids and replace with ref:alt
+	if ( $rk =~ /^(\w+:\w+:\S+:\d+:)\d*:\d+:\d+/ ) {
+		$newKey = $1;
+	} else {
+		$self->throw("Rowkey $rk not recognised\n");
+	}
+	my @array = split( "\t", $data->{'columns'}->{'D:'}->{'value'} );
+	my $ref   = $array[1];
+	my @alts  = split( ",", $array[2] );
+	foreach my $alt (@alts) {
+
+		# ignore non refs
+		next if $alt eq '<NON_REF>';
+		my $k = "$newKey$ref:$alt";
+
+		# query
+		my $result = $self->tableOperation( 'getRow', $k,undef, undef, $table );
+		# pull out the info data and put it into the VCF
+		if ( $result && scalar(@$result) > 0){
+			my $info = $result->[0]->{'columns'}->{'D:'}->{'value'};
+			$array[5] = "" if $array[5] eq ".";
+			$array[5] .= ";".$info;
+			$array[5] =~ s/^;//;
+			# rebuild the data object
+			$data->{'columns'}->{'D:'}->{'value'}= join("\t",@array);
+		}
+	}
+	return $data;
 }
 
 # this deals with the output of the data - text - hash - or ensembl object
@@ -983,6 +1061,9 @@ sub parseRowKey {
 	# unpack the coord system names
 	$pos[0] = 'chromosome'  if $pos[0] eq 'c';
 	$pos[0] = 'supercontig' if $pos[0] eq 's';
+	# remove padding from row keys
+	$pos[3] =~ s/^0+//;
+	$pos[4] =~ s/^0+//;
 	$data->{'SAMPLE'} = $pos[-1];
 	$data->{'CHR'}    = $pos[2];
 	$data->{'START'}  = $pos[3];
@@ -991,6 +1072,22 @@ sub parseRowKey {
 	$data->{'ASS'}    = $pos[1];
 	return $data;
 }
+
+sub parseColumns {
+	my ( $self, $data ) = @_;
+	my $hash;
+	unless ($data) {
+		$self->throw("What the what ?  $hash \n");
+	}
+
+	foreach my $col ( keys %{ $data->{'columns'} } ) {
+		# remove the column familly
+		$col =~ s/^D://;
+		$hash->{$col} =  $data->{'columns'}->{"D:".$col}->{'value'} ;
+	}
+	return $hash;
+}
+
 ########### Containers ##################
 sub variantAdaptor {
 	my ( $self, $value ) = @_;
@@ -1145,7 +1242,7 @@ sub sample {
 sub analysis {
 	my ( $self, $value ) = @_;
 	if ( defined $value ) {
-		unless ( $value->isa("Bio::EnsEMBL::Analysis") ) {
+		unless ( ref($value) eq  "Bio::EnsEMBL::Analysis" ) {
 
 			# fetch it
 			$value = $self->getAnalysis($value);
@@ -1252,5 +1349,19 @@ sub SliceAdaptor {
 	  $self->dbc->registry->get_adaptor( $self->dbc->species, 'core', 'slice' );
 	$self->{'slice_adaptor'} = $am;
 	return $self->{'slice_adaptor'};
+}
+
+# expects array ref of annotation tables to query
+sub annotation {
+	my ( $self, $value ) = @_;
+	if ( defined $value ) {
+		unless ( ref($value) eq 'ARRAY' ) {
+			$self->throw(   "annotation table names must be in array refs not "
+						  . ref($value)
+						  . "\n" );
+		}
+		$self->{'annotation'} = $value;
+	}
+	return $self->{'annotation'};
 }
 1;

@@ -17,21 +17,27 @@ my $sampleHash;
 my $tran;
 my $type = 'object';
 my $registry = $REGISTRY;
-my $analysis = 'nosqltest';
+my $analysis ;
 my $vt ;
+my $table;
+
 &GetOptions(
 	    'sample:s'  => \$sample,
+	    'analysis:s'=> \$analysis,
 	    'registry:s'=> \$registry,
 	    'tran:s'	=> \$tran,
 	    'type:s'	=> \$type,
 	   	'var_type:s'=> \$vt,
+	   	'table:s'	=> \$table,
 	    	   );
 	
 my $usage = "sliceVCFtest.pl 
 -tran 	 transcript id
 -sample  sample name
+-analysis analysis name
+-table 	table
 ";	   
-die $usage unless $sample && $tran;
+die $usage unless $sample && $tran && $table && $analysis;
 	   
 
 my $reg = 'Bio::EnsEMBL::Registry';
@@ -53,12 +59,13 @@ my $va = Adaptors::VariantTable->new(-con   => $db,
 								  -sample   => $sample,
 								  -analysis => $analysis,
 								  -buffer 	=> 1000,
-								  -type  	=> $type
-								  -varType  => $vt);
+								  -type  	=> $type,
+								  -varType  => $vt,
+								  -table    => $table);
 			
-$va->namespace("ADSP");
 
-	my $data = $va->fetchBySampleTranscript($sample,$tran,1) ;
+
+	my $data = $va->fetchBySampleTranscript($sample,$tran,1,1) ;
 
 
 #exit;

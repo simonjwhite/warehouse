@@ -148,7 +148,10 @@ sub configure {
 		'no_recover',
 		'cache=s',
 		'fasta=s',
-		'analysis=s'
+		'analysis=s',
+		'nolookup',
+		'simpleStore',
+		'pvcf'
 
 # die if we can't parse arguments - better to get user to sort out their command line
 # than potentially do the wrong thing
@@ -639,7 +642,7 @@ sub main {
 	my $head = "";
 
 	# store all the keys for a given sample to enable fast API lookups
-	my $keylist  = "";
+	my $keylist  ;
 	my $keycnt   = 0;
 	my $keybatch = 1;
 	while (<$in_file_handle>) {
@@ -669,8 +672,7 @@ sub main {
 				close TMP;
 			}
 			$sample = $config->{'individuals'}->[0];
-	
-						
+
 			# store this in hbase
 			$config->{hbase}->sample( $sample->name );
 
@@ -735,10 +737,12 @@ sub main {
 				$config->{skipped}->{non_variant}++;
 				next;
 			}
-			
+
 			# skip unwanted chromosomes
-			next if defined($config->{chrom_regexp}) && $data->{'#CHROM'} !~ m/$config->{chrom_regexp}/;
-			
+			next
+			  if defined( $config->{chrom_regexp} )
+			  && $data->{'#CHROM'} !~ m/$config->{chrom_regexp}/;
+
 			# parse info column
 			my %info;
 			foreach my $chunk ( split( /\;/, $data->{INFO} ) ) {
@@ -749,41 +753,121 @@ sub main {
 
 			# store the row keys every 50,000 rows
 			$keycnt++;
-			if ( $keycnt >= 50000 ) {
+			# save memory for pvcfs by batching earlier
+			my $bs = 50000;
+			$bs = 1000 if $config->{pvcf};
+			if ( $keycnt >= $bs) {
 
 				# store the batch of keys
 				print STDERR "\nStoring batch $keybatch of lookup keys\n";
-				if ( length($keylist) > 0 ) {
-					$config->{hbase}->storeLookup( $keylist, $keybatch );
+				if ( length( $keylist->{ $sample->name } ) > 0 ) {
+					$config->{hbase}
+					  ->storeLookup( $keylist->{ $sample->name }, $keybatch )
+					  unless $config->{"nolookup"};
 				}
-				$keylist = "";
-				$keycnt  = 0;
+				$keylist->{ $sample->name } = "";
+				$keycnt = 0;
 				$keybatch++;
 			}
-			my $value =
-			    $data->{"ID"} . "\t"
-			  . $data->{"REF"} . "\t"
-			  . $data->{"ALT"} . "\t"
-			  . $data->{"QUAL"} . "\t"
-			  . $data->{"FILTER"} . "\t"
-			  . $data->{"INFO"} . "\t"
-			  . $data->{"FORMAT"} . "\t"
-			  . $data->{ $sample->name };
-			
-			my $end = undef;
-			# if we have a gVCF expect an END tag in the INFO column
-			if ( $data->{"INFO"} =~ /;*END=(\d+);*/ ) {
-				$end = $1;
+
+			# loop over the individuals
+			foreach my $sample ( @{$config->{individuals}} ) {
+				
+				# tell hbase which sample we are on
+				$config->{hbase}->sample( $sample->name );
+				
+				my $value;
+				my $str;
+				my $meta;
+				if ( $config->{pvcf} ) {
+
+					# pvcfs store just the sample data for all individuals
+					$str->{TEXT} = $data->{ $sample->name }
+					  if ( $config->{pvcf} );
+					if ( $sample->name eq $config->{individuals}->[0]->name ) {
+
+						# for the 1st sample also store the meta data
+						# use a meta tag rather than sample id
+						$meta->{META} =
+						    $data->{"ID"} . "\t"
+						  . $data->{"REF"} . "\t"
+						  . $data->{"ALT"} . "\t"
+						  . $data->{"QUAL"} . "\t"
+						  . $data->{"FILTER"} . "\t"
+						  . $data->{"INFO"} . "\t"
+						  . $data->{"FORMAT"};
+					}
+				} else {
+					$str->{TEXT} =
+					    $data->{"ID"} . "\t"
+					  . $data->{"REF"} . "\t"
+					  . $data->{"ALT"} . "\t"
+					  . $data->{"QUAL"} . "\t"
+					  . $data->{"FILTER"} . "\t"
+					  . $data->{"INFO"} . "\t"
+					  . $data->{"FORMAT"} . "\t"
+					  . $data->{ $sample->name };
+
+					# dont store empty values
+					$value->{ID} = $data->{"ID"}
+					  if $data->{"ID"} && $data->{"ID"} ne ".";
+					$value->{REF}  = $data->{"REF"};
+					$value->{ALT}  = $data->{"ALT"};
+					$value->{QUAL} = $data->{"QUAL"}
+					  if $data->{"QUAL"} && $data->{"QUAL"} ne ".";
+					$value->{FILTER} = $data->{"FILTER"}
+					  if $data->{"FILTER"} && $data->{"FILTER"} ne ".";
+					$value->{POS}   = $data->{"POS"};
+					$value->{CHROM} = $data->{"#CHROM"};
+
+					# split the format and sample fields
+					my @fmts = split( ":", $data->{"FORMAT"} );
+					my @samp = split( ":", $data->{ $sample->name } );
+					for ( my $i = 0 ; $i < scalar(@fmts) ; $i++ ) {
+						$value->{ $fmts[$i] } = $samp[$i]
+						  if $samp[$i] && $samp[$i] ne ".";
+					}
+
+					# info
+					my @infos = split( ";", $data->{"INFO"} );
+					foreach my $i (@infos) {
+						if ( $i =~ /(\S+)=(\S+)/ ) {
+							$value->{$1} = $2 if $2 && $2 ne ".";
+						}
+					}
+				}
+				my $end = undef;
+
+				# if we have a gVCF expect an END tag in the INFO column
+				if ( $data->{"INFO"} =~ /;*END=(\d+);*/ ) {
+					$end = $1;
+				}
+
+				# store the row and get the lookup
+				# get the coord system
+				my $chr   = $data->{"#CHROM"};
+				my $coord = $cs{$chr};
+				if ( $config->{simpleStore} ) {
+
+					# just store the string
+					$keylist->{ $sample->name } .=
+					  $config->{hbase}
+					  ->storeData( $coord, $chr, $data->{"POS"}, $end, $str );
+				} else {
+
+					# store the more complex data structure
+					$keylist->{ $sample->name } .=
+					  $config->{hbase}
+					  ->storeData( $coord, $chr, $data->{"POS"}, $end, $value );
+				}
+				if ($meta) {
+
+					# special case store row meta data
+					$config->{hbase}
+					  ->storeData( $coord, $chr, $data->{"POS"}, $end, $meta,
+								   'meta' );
+				}
 			}
-			
-			
-			# store the row and get the lookup
-			# get the coord system
-			my $chr   = $data->{"#CHROM"};
-			my $coord = $cs{$chr};
-			$keylist .=
-			  $config->{hbase}
-			  ->storeData( $coord, $chr, $data->{"POS"}, $end, $value );
 
 			# use VEP's parse_line to get a skeleton VF
 			( $data->{tmp_vf} ) = @{ parse_line( $config, $data->{line} ) };
@@ -1063,10 +1147,15 @@ sub main {
 	$config->{hbase}->storeHeader($head);
 
 	# store last batch of row keys
-	if ( length($keylist) > 0 ) {
-		$config->{hbase}->storeLookup( $keylist, $keybatch );
+	# loop over the samples
+	foreach my $sample ( @{$config->{individuals}} ) {
+		if ( length( $keylist->{ $sample->name } ) > 0 ) {
+			my $kvs->{LOOKUP} = $keylist->{ $sample->name };
+			$config->{hbase}->storeLookup( $kvs, $keybatch )
+			  unless $config->{'nolookup'};
+		}
 	}
-	
+
 	# write to the meta table to say we have finished
 	$config->{hbase}->storeMetaFinish();
 	debug(
@@ -1755,6 +1844,11 @@ sub parse_header {
 		else {
 			delete $config->{tables}->{$_}
 			  foreach qw(compressed_genotype_region compressed_genotype_var);
+
+			# use the source if we have no sample data
+			warn("Sample name not found, using source name instead\n");
+			push( @split, $config->{'source'} );
+			$config->{individuals} = individuals( $config, \@split );
 		}
 	}
 	return \%headers;
@@ -3068,6 +3162,13 @@ Options
                       scanned up front and the chromosomes sub-divided into regions.
                       Input file must be bgzipped and tabix indexed. 10 processes
                       is usually optimal. [default: no forking]
+
+--nolookup            Dont store lookup data ( for large datasources etc )
+
+--simpleStore		  Just store the data as text rather than a more complex key value relationship.
+
+--pvcf				  Only store the sample information.
+			                        
 END
 	print $usage;
 }

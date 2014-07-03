@@ -18,7 +18,7 @@ my $start;
 my $end;
 my $table;
 my $registry = $REGISTRY;
-my $analysis = 'nosqltest';
+my $analysis ;
 my $phenotype;
 my $regex =".+";
 
@@ -36,7 +36,7 @@ my $usage = "sliceVCFtest.pl
 -samples file of sample names - one per line
 -table	 table to query
 ";	   
-die $usage unless $phenotype;
+die $usage unless $phenotype && $analysis && $table && $sample;
 	   
 # load the data
 if ( $sampleFile ) {
@@ -56,15 +56,16 @@ my $db = Adaptors::Connection->new( -host => "hadoop-headnode1",
 # $reg->load_all($registry);
   
 # get the variant table and send it a phenotype
-my $va = Adaptors::VariantSummaryTable->new(
+my $va = Adaptors::VariantTable->new(
 											 -con      => $db,
 											 -analysis => $analysis,
 											 -sample   => $sample,
 											 -buffer   => 1000,
 											 -type     => 'hash',
 											 -versions => 4,
+											 -table   => $table
 );
-$va->namespace("CHARGE_SUMMARY");
+
 
 my $data = $va->fetchByPhenotype( $phenotype );
 

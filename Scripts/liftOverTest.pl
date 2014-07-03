@@ -19,6 +19,7 @@ my $end;
 my $registry = $REGISTRY;
 my $cs;
 my $table = 'ADSP'; 
+my $annotation;
 
 
 &GetOptions(
@@ -26,14 +27,18 @@ my $table = 'ADSP';
 	    'registry:s' => \$registry,
 	    'analysis:s' => \$analysis,
 	    'liftover:s' => \$cs,
-	    'table:s'	=>	\$table
+	    'table:s'	=>	\$table,
+	    'annotation:s' => \$annotation
 	    	   );
 	
 my $usage = "liftOverTest.pl 
 -sample  	name
 -liftover 	coordsystem to lift over to
+-annotation csv of tables to query
 ";	   
 die $usage unless $sample ;
+
+my @aa = split(",",$annotation);
 
 # lets see if we can get a connection
 my $db = Adaptors::Connection->new( -host => "hadoop-headnode1",
@@ -46,7 +51,8 @@ my $svcf = Modules::SampleVCF->new(-con     => $db,
 								  -analysis => $analysis,
 								  -liftover => $cs,
 								  -table    => $table,
-								  -buffer => 1000);
+								  -buffer => 10000,
+								  -annotation => \@aa);
 							  
 #now make me a vcf
 $svcf->vcfFromSample($sample);

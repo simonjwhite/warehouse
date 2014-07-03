@@ -25,7 +25,7 @@ sub new {
  
   $self->varType($vt) if $vt;
   # define namespace
-  $table = 'VARIANT' unless $table;
+  $self->throw("No table defined") unless $table;
   $self->namespace($table);
   return $self;
 }
@@ -56,39 +56,84 @@ sub format {
 		my $sa = $self->SliceAdaptor;
 
 		# parse the data out of the hash
-		my $row = $data->{'row'};
-		my ($cs,$asm,$chr,$start,$end) = split(":",$row);
-		my $slice = $sa->fetch_by_region('toplevel',$chr);
-		my $string =  $data->{'columns'}->{'D:'}->{'value'};
-		my ($id,$ref,$alt,$qual,$filter,$info,$format,$sample) = split("\t",$string);
+		my $row = $self->parseRowKey($data);
+		my $cols = $self->parseColumns($data);
+		my $slice = $sa->fetch_by_region('toplevel',$row->{CHR});
+
 		# build a ensembl variation object
 		my $vf = Bio::EnsEMBL::Variation::VariationFeature->new
-       (-start   => $start,
-        -end     => $start,
+       (-start   => $row->{START},
+        -end     => $row->{START},
         -strand  => 1,
         -slice   => $slice,
-        -allele_string => "$ref"."/"."$alt");
+        -allele_string => $cols->{REF} . "/".$cols->{ALT});
         $output = $vf;
+	} elsif ($format eq 'text'){
+		my $string;
+		# make the VCF format
+		# 1 read the header
+		my $mapping = $self->mapping;
+		unless ( $mapping){
+			my $header = $self->getHeader($self->sample->name);
+			# parse the header tags
+			my @lines = split("\n",$header);
+			foreach my $line ( @lines){
+				$string .= "$line\n";
+				if ( $line =~ /^##FORMAT=<ID=(\w+)\,/){
+					push (@{$mapping->{FORMAT}},$1);
+				}
+				if ( $line =~ /^##INFO=<ID=(\w+)\,/){
+					push(@{$mapping->{INFO}},$1);
+				}
+			}
+			$self->mapping($mapping);
+		}
+		my $rk = $self->parseRowKey($data);
+		my $cols = $self->parseColumns($data);
+		my $id = ".";
+		my $qual = ".";
+		$id = $cols->{'ID'} if $cols->{'ID'} ;
+		$qual =  $cols->{'QUAL'} if  $cols->{'QUAL'};
+		$string .= $rk->{'CHR'}  ."\t".
+				   $rk->{'START'} ."\t". 
+				   $id."\t".
+				   $cols->{'REF'} ."\t".
+				   $cols->{'ALT'} ."\t".
+				   $qual ."\t".
+				   $cols->{'FILTER'} ."\t";
+		#INFO
+		my $info;
+		foreach my $tag ( @{$mapping->{INFO}}){
+			if ( $cols->{$tag} ){
+				$info .= $cols->{$tag} .";";	
+			} else {
+				$info .= ".";	
+			}
+
+		}
+		$info =~ s/;$//;
+		$string .= $info ."\t";
+		# FORMAT
+		my $format;
+		foreach my $tag ( @{$mapping->{FORMAT}}){
+			$format .= $tag.":";
+		}
+		$format =~ s/:$//;	
+		$string .= $format ."\t";	
+		$format = "";   
+		foreach my $tag ( @{$mapping->{FORMAT}}){
+			if ( $cols->{$tag} ){
+				$format .= $cols->{$tag}.":";
+			} else {
+				$format .= ".:";	
+			}
+		}
+		$string .= $format ."\n";			   
+		$output = $string;
 	} else {
 		return $self->SUPER::format($data);
 	}
 	return $output;
-}
-
-sub parseLine {
-	my ($self,$line) = @_;
-	# return a hash ref
-	my @array = split("\t",$line);
-	my $hr;
-	$hr->{'ID'} 	= $array[0];
-	$hr->{'REF'} 	= $array[1];	
-	$hr->{'ALT'} 	= $array[2];	
-	$hr->{'QUAL'} 	= $array[3];
-	$hr->{'FILTER'} = $array[4];
-	$hr->{'INFO'} 	= $array[5];	
-	$hr->{'FORMAT'} = $array[6];
-	$hr->{'SAMPLE'} = $array[7];
-	return $hr;
 }
 
 
@@ -102,4 +147,11 @@ sub varType {
 	return $self->{'vt'};
 }
 
+sub mapping {
+	my ( $self, $value ) = @_;
+	if ($value) {
+		$self->{'mapping'} = $value;
+	}
+	return $self->{'mapping'};
+}
 1;
